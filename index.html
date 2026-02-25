@@ -15,11 +15,13 @@
     --red: #ff3333;
     --blue: #0088ff;
     --cyan: #00ffff;
+    --magenta: #ff00ff;
     --white: #ccffcc;
     --bg: #050f05;
     --bg2: #0a180a;
     --panel: #071007;
     --border: #005500;
+    --gold: #ffd700;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,23 +35,18 @@
     overflow-x: hidden;
   }
 
-  /* CRT scanline effect */
   body::before {
     content: '';
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
     background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0,0,0,0.15) 2px,
-      rgba(0,0,0,0.15) 4px
+      0deg, transparent, transparent 2px,
+      rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px
     );
     pointer-events: none;
     z-index: 1000;
   }
 
-  /* CRT flicker */
   body::after {
     content: '';
     position: fixed;
@@ -60,16 +57,9 @@
     animation: flicker 0.15s infinite;
   }
 
-  @keyframes flicker {
-    0%,100% { opacity: 1; }
-    50% { opacity: 0.97; }
-  }
+  @keyframes flicker { 0%,100% { opacity: 1; } 50% { opacity: 0.97; } }
 
-  .screen {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 10px;
-  }
+  .screen { max-width: 1400px; margin: 0 auto; padding: 10px; }
 
   .header {
     text-align: center;
@@ -86,37 +76,56 @@
     letter-spacing: 4px;
   }
 
-  .header .subtitle {
-    color: var(--green-dim);
-    font-size: 11px;
-    letter-spacing: 2px;
-  }
+  .header .subtitle { color: var(--green-dim); font-size: 11px; letter-spacing: 2px; }
 
   .stats-bar {
     display: flex;
-    gap: 20px;
+    gap: 16px;
     padding: 5px 0;
     border-bottom: 1px solid var(--border);
     margin-bottom: 8px;
     flex-wrap: wrap;
-  }
-
-  .stat {
-    display: flex;
-    gap: 6px;
     align-items: center;
   }
 
+  .stat { display: flex; gap: 6px; align-items: center; }
   .stat-label { color: var(--green-dim); }
   .stat-value { color: var(--amber); font-weight: bold; }
   .stat-value.good { color: var(--green); }
   .stat-value.bad { color: var(--red); }
+  .stat-value.gold { color: var(--gold); text-shadow: 0 0 8px var(--gold); }
+
+  .money-display {
+    font-family: 'VT323', monospace;
+    font-size: 22px;
+    color: var(--gold);
+    text-shadow: 0 0 10px rgba(255,215,0,0.5);
+    letter-spacing: 1px;
+    border: 1px solid rgba(255,215,0,0.3);
+    padding: 2px 10px;
+    background: rgba(255,215,0,0.05);
+  }
+
+  .money-earn-anim {
+    position: fixed;
+    pointer-events: none;
+    font-family: 'VT323', monospace;
+    font-size: 20px;
+    color: var(--gold);
+    text-shadow: 0 0 8px var(--gold);
+    animation: float-up 1.5s ease-out forwards;
+    z-index: 2000;
+  }
+  @keyframes float-up {
+    0% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-60px); }
+  }
 
   .main-layout {
     display: grid;
-    grid-template-columns: 280px 1fr 260px;
+    grid-template-columns: 240px 1fr 280px;
     gap: 8px;
-    height: calc(100vh - 120px);
+    height: calc(100vh - 128px);
   }
 
   .panel {
@@ -138,21 +147,12 @@
     padding-bottom: 4px;
     margin-bottom: 4px;
     text-shadow: 0 0 8px var(--amber);
+    flex-shrink: 0;
   }
 
   /* DISK MAP */
-  .disk-panel {
-    grid-column: 2;
-    display: flex;
-    flex-direction: column;
-  }
-
-  #disk-map {
-    display: grid;
-    gap: 1px;
-    flex: 1;
-    align-content: start;
-  }
+  .disk-panel { grid-column: 2; display: flex; flex-direction: column; }
+  #disk-map { display: grid; gap: 1px; flex: 1; align-content: start; }
 
   .block {
     width: 100%;
@@ -181,19 +181,11 @@
 
   .block.free { background: var(--bg2); border: 1px solid #111; }
   .block.used { border: none; }
+  @keyframes blink-read { 0%,100% { filter: none; } 50% { filter: brightness(3) saturate(0); } }
+  @keyframes blink-write { 0%,100% { filter: none; } 50% { filter: brightness(4); } }
   .block.defrag-read { animation: blink-read 0.2s; }
   .block.defrag-write { animation: blink-write 0.2s; }
 
-  @keyframes blink-read {
-    0%,100% { filter: none; }
-    50% { filter: brightness(3) saturate(0); }
-  }
-  @keyframes blink-write {
-    0%,100% { filter: none; }
-    50% { filter: brightness(4); }
-  }
-
-  /* FILESYSTEM OPS */
   .btn {
     background: transparent;
     border: 1px solid var(--green-dim);
@@ -209,11 +201,15 @@
   .btn:hover { background: var(--green-dark); border-color: var(--green); color: var(--white); }
   .btn:disabled { opacity: 0.3; cursor: not-allowed; }
   .btn.primary { border-color: var(--amber); color: var(--amber); }
-  .btn.primary:hover { background: #1a0e00; border-color: var(--amber); }
+  .btn.primary:hover { background: #1a0e00; }
   .btn.danger { border-color: var(--red); color: var(--red); }
   .btn.danger:hover { background: #1a0000; }
   .btn.run { border-color: var(--cyan); color: var(--cyan); font-family: 'VT323', monospace; font-size: 18px; letter-spacing: 1px; }
   .btn.run:hover { background: #001a1a; }
+  .btn.gold-btn { border-color: var(--gold); color: var(--gold); }
+  .btn.gold-btn:hover { background: rgba(255,215,0,0.08); }
+  .btn.stop-btn { border-color: var(--red); color: var(--red); font-family: 'VT323', monospace; font-size: 18px; }
+  .btn.stop-btn:hover { background: #1a0000; }
 
   input[type="text"], input[type="number"], select {
     background: #050f05;
@@ -225,9 +221,7 @@
     width: 100%;
     outline: none;
   }
-
   input:focus, select:focus { border-color: var(--green); }
-
   select option { background: #050f05; }
 
   .input-row {
@@ -235,10 +229,8 @@
     gap: 4px;
     align-items: center;
   }
-
   .input-row label { color: var(--green-dim); white-space: nowrap; font-size: 11px; min-width: 55px; }
 
-  /* FILE LIST */
   .file-item {
     display: flex;
     align-items: center;
@@ -257,51 +249,20 @@
   .file-frag.bad { color: var(--red); }
   .file-frag.ok { color: var(--green-dim); }
 
-  /* LOG */
-  #log {
-    flex: 1;
-    overflow-y: auto;
-    font-size: 11px;
-    line-height: 1.6;
-  }
-
+  #log { flex: 1; overflow-y: auto; font-size: 11px; line-height: 1.6; }
   .log-line { color: var(--green-dim); }
   .log-line.action { color: var(--green); }
   .log-line.warn { color: var(--amber); }
   .log-line.err { color: var(--red); }
   .log-line.defrag { color: var(--cyan); }
+  .log-line.money { color: var(--gold); }
+  .log-line.crash { color: var(--red); font-weight: bold; }
 
-  /* DEFRAG PROGRESS */
-  .progress-bar {
-    height: 14px;
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    overflow: hidden;
-  }
-  .progress-fill {
-    height: 100%;
-    background: var(--cyan);
-    transition: width 0.1s linear;
-    box-shadow: 0 0 6px var(--cyan);
-  }
-
-  /* MACRO */
-  .macro-item {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px;
-    font-size: 11px;
-    border: 1px solid transparent;
-  }
-  .macro-item:hover { border-color: var(--border); }
-  .macro-op { flex: 1; color: var(--green); }
-  .macro-del { color: var(--red); cursor: pointer; padding: 0 4px; }
-  .macro-del:hover { background: #1a0000; }
+  .progress-bar { height: 14px; background: var(--bg2); border: 1px solid var(--border); overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--cyan); transition: width 0.1s linear; box-shadow: 0 0 6px var(--cyan); }
 
   .separator { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
 
-  /* LEGEND */
   .legend { display: flex; flex-wrap: wrap; gap: 6px; font-size: 10px; }
   .legend-item { display: flex; gap: 4px; align-items: center; }
   .legend-dot { width: 8px; height: 8px; border-radius: 1px; }
@@ -315,19 +276,58 @@
     min-height: 26px;
   }
 
-  .fragmentation-meter {
-    height: 8px;
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    overflow: hidden;
-    position: relative;
-  }
+  .fragmentation-meter { height: 8px; background: var(--bg2); border: 1px solid var(--border); overflow: hidden; }
+  .frag-fill { height: 100%; transition: width 0.5s; background: linear-gradient(to right, var(--green), var(--amber), var(--red)); }
 
-  .frag-fill {
-    height: 100%;
-    transition: width 0.5s;
-    background: linear-gradient(to right, var(--green), var(--amber), var(--red));
+  /* SOFTWARE CARDS */
+  .software-card {
+    border: 1px solid var(--border);
+    padding: 6px;
+    background: rgba(0,40,0,0.3);
+    transition: border-color 0.1s;
   }
+  .software-card.running { border-color: var(--cyan); background: rgba(0,40,40,0.3); }
+  .software-card.crashed { border-color: var(--red); background: rgba(40,0,0,0.2); }
+  .software-card.locked { opacity: 0.5; border-style: dashed; }
+
+  .sw-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .sw-name { font-family: 'VT323', monospace; font-size: 16px; color: var(--green); }
+  .sw-name.running-name { color: var(--cyan); text-shadow: 0 0 6px var(--cyan); }
+  .sw-name.crashed-name { color: var(--red); }
+  .sw-badge {
+    font-size: 9px;
+    padding: 1px 4px;
+    border: 1px solid currentColor;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .sw-badge.server { color: var(--magenta); }
+  .sw-badge.idle { color: var(--green-dim); }
+
+  .sw-info { font-size: 10px; color: var(--green-dim); line-height: 1.5; margin-bottom: 4px; }
+  .sw-info span { color: var(--amber); }
+
+  .sw-progress { height: 4px; background: var(--bg2); border: 1px solid var(--border); margin: 3px 0; overflow: hidden; }
+  .sw-progress-fill { height: 100%; background: var(--cyan); transition: width 0.15s; }
+
+  .sw-btn-row { display: flex; gap: 4px; }
+  .sw-btn { flex: 1; font-size: 11px; padding: 2px 6px; font-family: 'VT323', monospace; font-size: 15px; }
+
+  /* SHOP */
+  .shop-item {
+    border: 1px solid var(--border);
+    padding: 5px;
+    background: rgba(0,20,0,0.3);
+  }
+  .shop-item:hover { border-color: var(--green-dim); }
+  .shop-name { font-family: 'VT323', monospace; font-size: 15px; color: var(--amber); }
+  .shop-desc { font-size: 10px; color: var(--green-dim); margin: 2px 0; }
+  .shop-price { color: var(--gold); font-size: 11px; }
+  .shop-req { font-size: 10px; color: var(--red); margin-bottom: 3px; }
+
+  /* RAM display */
+  .ram-bar { height: 10px; background: var(--bg2); border: 1px solid var(--border); overflow: hidden; margin-top: 3px; }
+  .ram-fill { height: 100%; background: var(--amber); transition: width 0.3s; box-shadow: 0 0 4px var(--amber); }
 
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: var(--bg); }
@@ -338,75 +338,29 @@
 <div class="screen">
   <div class="header">
     <h1>⬛ DEFRAG.EXE v4.2</h1>
-    <div class="subtitle">MIRACULOUS DISK DEFRAGMENTER — C: DRIVE — 1024 BLOCKS</div>
+    <div class="subtitle">MIRACULOUS DISK DEFRAGMENTER &amp; SYSTEMS MANAGEMENT SUITE</div>
   </div>
 
   <div class="stats-bar">
-    <div class="stat"><span class="stat-label">DRIVE:</span><span class="stat-value">C:\</span></div>
-    <div class="stat"><span class="stat-label">CAPACITY:</span><span class="stat-value">1024 BLK</span></div>
+    <div class="stat"><span class="money-display" id="money-display">$ 0.00</span></div>
+    <div class="stat"><span class="stat-label">DRIVE:</span><span class="stat-value" id="stat-drive">C:\</span></div>
+    <div class="stat"><span class="stat-label">CAPACITY:</span><span class="stat-value" id="stat-capacity">512 BLK</span></div>
     <div class="stat"><span class="stat-label">USED:</span><span id="stat-used" class="stat-value">0 BLK</span></div>
-    <div class="stat"><span class="stat-label">FREE:</span><span id="stat-free" class="stat-value good">1024 BLK</span></div>
+    <div class="stat"><span class="stat-label">FREE:</span><span id="stat-free" class="stat-value good">512 BLK</span></div>
     <div class="stat"><span class="stat-label">FILES:</span><span id="stat-files" class="stat-value">0</span></div>
-    <div class="stat"><span class="stat-label">FRAGMENTATION:</span><span id="stat-frag" class="stat-value good">0%</span></div>
+    <div class="stat"><span class="stat-label">FRAG:</span><span id="stat-frag" class="stat-value good">0%</span></div>
+    <div class="stat"><span class="stat-label">RAM:</span><span id="stat-ram" class="stat-value">256 KB</span></div>
     <div class="stat" style="flex:1"><div class="fragmentation-meter"><div class="frag-fill" id="frag-meter" style="width:0%"></div></div></div>
   </div>
 
   <div class="main-layout">
-    <!-- LEFT: FS OPS -->
-    <div class="panel">
-      <div class="panel-title">📁 Filesystem Ops</div>
-
-      <div class="input-row">
-        <label>Filename:</label>
-        <input type="text" id="in-filename" value="FILE001.DAT" maxlength="12">
-      </div>
-      <div class="input-row">
-        <label>Size (blk):</label>
-        <input type="number" id="in-size" value="8" min="1" max="50">
-      </div>
-
-      <button class="btn" onclick="opCreate()">▶ CREATE FILE</button>
-      <button class="btn" onclick="opAppend()">▶ APPEND TO FILE</button>
-      <button class="btn" onclick="opDelete()">▶ DELETE FILE</button>
-      <button class="btn" onclick="opRename()">▶ RENAME FILE</button>
-      <button class="btn" onclick="opModify()">▶ MODIFY (touch)</button>
-
+    <!-- LEFT: SOFTWARE PANEL -->
+    <div class="panel" id="left-panel">
+      <div class="panel-title">💾 Software</div>
+      <div id="software-list" style="display:flex;flex-direction:column;gap:6px;flex:1;overflow-y:auto;"></div>
       <hr class="separator">
-      <div class="panel-title" style="font-size:14px">⚡ BULK OPS</div>
-
-      <div class="input-row">
-        <label>Count:</label>
-        <input type="number" id="in-bulk-count" value="10" min="1" max="50">
-      </div>
-      <button class="btn primary" onclick="bulkCreate()">⬛ BULK CREATE FILES</button>
-      <button class="btn primary" onclick="bulkDeleteRandom()">⬛ BULK DELETE RANDOM</button>
-      <button class="btn primary" onclick="bulkCreateDelete()">⬛ CREATE + DELETE CYCLE</button>
-      <button class="btn primary" onclick="bulkAppendAll()">⬛ APPEND ALL FILES</button>
-
-      <hr class="separator">
-      <div class="panel-title" style="font-size:14px">📋 MACRO</div>
-
-      <div class="input-row">
-        <select id="macro-op-select">
-          <option value="create">Create file</option>
-          <option value="append">Append to file</option>
-          <option value="delete">Delete file</option>
-          <option value="bulkCreate">Bulk create</option>
-          <option value="bulkDelete">Bulk delete</option>
-          <option value="bulkCycle">Create+Delete cycle</option>
-          <option value="appendAll">Append all files</option>
-        </select>
-      </div>
-      <button class="btn" onclick="macroAdd()">+ ADD TO MACRO</button>
-
-      <div id="macro-list" style="max-height:80px;overflow-y:auto;border:1px solid var(--border);padding:2px;"></div>
-
-      <div class="input-row">
-        <label>Repeat:</label>
-        <input type="number" id="macro-repeat" value="5" min="1" max="100">
-      </div>
-      <button class="btn run" onclick="macroRun()">▶▶ RUN MACRO</button>
-      <button class="btn danger" onclick="macroClear()">✕ CLEAR MACRO</button>
+      <div class="panel-title" style="font-size:14px">🛒 Shop</div>
+      <div id="shop-list" style="display:flex;flex-direction:column;gap:5px;overflow-y:auto;max-height:260px;"></div>
     </div>
 
     <!-- CENTER: DISK MAP -->
@@ -421,7 +375,6 @@
       <hr class="separator">
       <div class="defrag-status" id="defrag-status">READY</div>
       <div class="progress-bar" style="margin: 2px 0"><div class="progress-fill" id="defrag-progress" style="width:0%"></div></div>
-
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
         <div>
           <div style="color:var(--green-dim);font-size:11px;margin-bottom:3px">DEFRAG MODE:</div>
@@ -443,56 +396,297 @@
           </select>
         </div>
       </div>
-
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
         <button class="btn run" id="btn-defrag" onclick="startDefrag()">▶ RUN DEFRAG</button>
         <button class="btn danger" id="btn-stop" onclick="stopDefrag()" disabled>■ STOP</button>
       </div>
     </div>
 
-    <!-- RIGHT: FILE LIST + LOG -->
+    <!-- RIGHT: FILE LIST + LOG + HW -->
     <div class="panel">
-      <div class="panel-title">📂 Files</div>
-      <div id="file-list" style="flex:1;overflow-y:auto;max-height:300px;border:1px solid var(--border);padding:2px;"></div>
+      <!-- Hardware info -->
+      <div class="panel-title" style="font-size:14px">⚙ Hardware</div>
+      <div style="font-size:11px;color:var(--green-dim)">
+        RAM: <span id="hw-ram" style="color:var(--amber)">256 KB</span>
+        &nbsp;|&nbsp; RAM Used: <span id="hw-ram-used" style="color:var(--amber)">0 KB</span>
+      </div>
+      <div class="ram-bar"><div class="ram-fill" id="ram-fill" style="width:0%"></div></div>
+      <div style="font-size:10px;color:var(--green-dim);margin-top:2px">
+        HDD: <span id="hw-hdd" style="color:var(--amber)">512 BLK</span>
+      </div>
 
       <hr class="separator">
-      <div class="panel-title" style="font-size:14px">📟 ACTIVITY LOG</div>
-      <div id="log" style="flex:1;border:1px solid var(--border);padding:4px;max-height:280px"></div>
+      <div class="panel-title">📂 Files</div>
+      <div id="file-list" style="flex:1;overflow-y:auto;max-height:220px;border:1px solid var(--border);padding:2px;min-height:60px;"></div>
+
+      <hr class="separator">
+      <div class="panel-title" style="font-size:14px">📟 Activity Log</div>
+      <div id="log" style="flex:1;border:1px solid var(--border);padding:4px;min-height:80px;max-height:280px;overflow-y:auto;"></div>
+
+      <!-- Manual FS ops (collapsed) -->
+      <hr class="separator">
+      <details>
+        <summary style="color:var(--green-dim);font-size:11px;cursor:pointer;user-select:none;">▶ Manual Filesystem Ops</summary>
+        <div style="display:flex;flex-direction:column;gap:5px;margin-top:5px;">
+          <div class="input-row">
+            <label>Filename:</label>
+            <input type="text" id="in-filename" value="FILE001.DAT" maxlength="12">
+          </div>
+          <div class="input-row">
+            <label>Size (blk):</label>
+            <input type="number" id="in-size" value="8" min="1" max="50">
+          </div>
+          <button class="btn" onclick="opCreate()">▶ CREATE FILE</button>
+          <button class="btn" onclick="opAppend()">▶ APPEND TO FILE</button>
+          <button class="btn" onclick="opDelete()">▶ DELETE FILE</button>
+          <button class="btn" onclick="opRename()">▶ RENAME FILE</button>
+          <button class="btn" onclick="opModify()">▶ MODIFY (touch)</button>
+          <hr class="separator">
+          <div class="input-row">
+            <label>Count:</label>
+            <input type="number" id="in-bulk-count" value="10" min="1" max="50">
+          </div>
+          <button class="btn primary" onclick="bulkCreate()">⬛ BULK CREATE</button>
+          <button class="btn primary" onclick="bulkDeleteRandom()">⬛ BULK DELETE RANDOM</button>
+          <button class="btn primary" onclick="bulkCreateDelete()">⬛ CREATE+DELETE CYCLE</button>
+          <button class="btn primary" onclick="bulkAppendAll()">⬛ APPEND ALL FILES</button>
+        </div>
+      </details>
     </div>
   </div>
 </div>
 
 <script>
 // ==========================================
-// DISK MODEL
+// GAME STATE
 // ==========================================
-const DISK_SIZE = 1024;
-const COLS = 32; // blocks per row = 16 rows
+let DISK_SIZE = 512;
+let RAM_SIZE = 256; // KB
+const COLS = 32;
 
-// disk[i] = null (free) or fileId (number)
-let disk = new Array(DISK_SIZE).fill(null);
-let files = {}; // id -> { name, color, blocks[], created, modified, size }
+let disk = [];
+let files = {};
 let nextFileId = 1;
 let selectedFileId = null;
-let defragInterval = null;
 let defragRunning = false;
+let playerMoney = 0;
 
-// Reserve first 8 blocks for "system"
-const SYSTEM_BLOCKS = 8;
-for (let i = 0; i < SYSTEM_BLOCKS; i++) disk[i] = 0; // 0 = system
-files[0] = { name: 'SYSTEM', color: '#0044cc', blocks: [...Array(SYSTEM_BLOCKS).keys()], created: 0, modified: 0, size: SYSTEM_BLOCKS };
+// Software runtime state: swId -> { running, looping, stepIndex, intervalHandle, crashMsg }
+let swRuntime = {};
+
+const SYSTEM_BLOCKS = 4;
+
+// ==========================================
+// SHOP CATALOG
+// ==========================================
+const SHOP_UPGRADES = [
+  {
+    id: 'hdd512',
+    name: 'HDD Upgrade: 1024 BLK',
+    desc: 'Double your disk capacity to 1024 blocks.',
+    price: 50,
+    ramReq: 0,
+    type: 'hdd',
+    value: 1024,
+    bought: false,
+  },
+  {
+    id: 'hdd2048',
+    name: 'HDD Upgrade: 2048 BLK',
+    desc: 'Expand to 2048 blocks of storage.',
+    price: 300,
+    ramReq: 0,
+    type: 'hdd',
+    value: 2048,
+    bought: false,
+  },
+  {
+    id: 'ram512',
+    name: 'RAM Upgrade: 512 KB',
+    desc: 'More memory — run heavier software.',
+    price: 30,
+    ramReq: 0,
+    type: 'ram',
+    value: 512,
+    bought: false,
+  },
+  {
+    id: 'ram1024',
+    name: 'RAM Upgrade: 1024 KB',
+    desc: 'Beefy RAM for server-class programs.',
+    price: 150,
+    ramReq: 512,
+    type: 'ram',
+    value: 1024,
+    bought: false,
+  },
+  {
+    id: 'ram2048',
+    name: 'RAM Upgrade: 2048 KB',
+    desc: 'Enterprise-grade memory headroom.',
+    price: 800,
+    ramReq: 1024,
+    type: 'ram',
+    value: 2048,
+    bought: false,
+  },
+];
+
+// ==========================================
+// SOFTWARE CATALOG
+// ==========================================
+// Operations: { op: 'create'|'append'|'delete'|'read'|'earn', file?, size?, amount? }
+// 'file' can be a key string → persistent named file; or null → temp file (tracked per-run)
+const SOFTWARE_CATALOG = [
+  {
+    id: 'sw_ledger',
+    name: 'LEDGER.EXE',
+    desc: 'A tiny accounting script. Reads a ledger file and earns a small fee.',
+    badgeType: 'idle',
+    price: 0, // starter — free / auto-installed
+    ramReq: 64,
+    isServer: false,
+    persistentFiles: [
+      { key: 'ledger_dat', name: 'LEDGER.DAT', size: 2 }
+    ],
+    ops: [
+      { op: 'read', file: 'ledger_dat' },
+      { op: 'earn', amount: 10.05 },
+    ],
+  },
+  {
+    id: 'sw_sorter',
+    name: 'SORTR.EXE',
+    desc: 'Sorts data batches. Creates temp files and earns on completion.',
+    badgeType: 'idle',
+    price: 15,
+    ramReq: 128,
+    isServer: false,
+    persistentFiles: [
+      { key: 'sort_cfg', name: 'SORTR.CFG', size: 1 },
+    ],
+    ops: [
+      { op: 'create', file: null, name: 'SORT_TMP.DAT', size: 5 },
+      { op: 'read', file: 'sort_cfg' },
+      { op: 'append', file: null, size: 3 },
+      { op: 'earn', amount: 0.30 },
+      { op: 'delete', file: null },
+    ],
+  },
+  {
+    id: 'sw_archiver',
+    name: 'ARCHIVR.EXE',
+    desc: 'Compresses and archives files. Moderate earnings.',
+    badgeType: 'idle',
+    price: 60,
+    ramReq: 256,
+    isServer: false,
+    persistentFiles: [
+      { key: 'arch_idx', name: 'ARCH.IDX', size: 3 },
+      { key: 'arch_db', name: 'ARCH.DB', size: 8 },
+    ],
+    ops: [
+      { op: 'read', file: 'arch_idx' },
+      { op: 'create', file: null, name: 'PACK.TMP', size: 12 },
+      { op: 'append', file: 'arch_db', size: 4 },
+      { op: 'earn', amount: 1.20 },
+      { op: 'delete', file: null },
+    ],
+  },
+  {
+    id: 'sw_cruncher',
+    name: 'CRUNCHR.EXE',
+    desc: 'Number crunching daemon. Runs continuously as a server.',
+    badgeType: 'server',
+    price: 200,
+    ramReq: 512,
+    isServer: true,
+    persistentFiles: [
+      { key: 'crunch_cfg', name: 'CRUNCH.CFG', size: 2 },
+      { key: 'crunch_log', name: 'CRUNCH.LOG', size: 6 },
+    ],
+    ops: [
+      { op: 'read', file: 'crunch_cfg' },
+      { op: 'create', file: null, name: 'CHUNK.TMP', size: 8 },
+      { op: 'append', file: 'crunch_log', size: 2 },
+      { op: 'earn', amount: 3.50 },
+      { op: 'delete', file: null },
+    ],
+  },
+  {
+    id: 'sw_datamill',
+    name: 'DATAMILL.EXE',
+    desc: 'Continuous data pipeline. Heavy on disk. High reward server.',
+    badgeType: 'server',
+    price: 800,
+    ramReq: 1024,
+    isServer: true,
+    persistentFiles: [
+      { key: 'mill_cfg', name: 'MILL.CFG', size: 2 },
+      { key: 'mill_idx', name: 'MILL.IDX', size: 10 },
+      { key: 'mill_out', name: 'MILL.OUT', size: 20 },
+    ],
+    ops: [
+      { op: 'read', file: 'mill_cfg' },
+      { op: 'create', file: null, name: 'PIPE_A.TMP', size: 15 },
+      { op: 'create', file: null, name: 'PIPE_B.TMP', size: 10 },
+      { op: 'append', file: 'mill_out', size: 5 },
+      { op: 'append', file: 'mill_idx', size: 3 },
+      { op: 'earn', amount: 18.00 },
+      { op: 'delete', file: null, which: 'PIPE_A.TMP' },
+      { op: 'delete', file: null, which: 'PIPE_B.TMP' },
+    ],
+  },
+  {
+    id: 'sw_gridnode',
+    name: 'GRIDNODE.SRV',
+    desc: 'A compute grid node. Massively fragents disk. Enormous revenue.',
+    badgeType: 'server',
+    price: 3000,
+    ramReq: 2048,
+    isServer: true,
+    persistentFiles: [
+      { key: 'gn_cfg', name: 'GRID.CFG', size: 3 },
+      { key: 'gn_state', name: 'GRID.STA', size: 15 },
+      { key: 'gn_db', name: 'GRID.DB', size: 40 },
+    ],
+    ops: [
+      { op: 'read', file: 'gn_cfg' },
+      { op: 'create', file: null, name: 'NODE_A.TMP', size: 20 },
+      { op: 'create', file: null, name: 'NODE_B.TMP', size: 18 },
+      { op: 'create', file: null, name: 'NODE_C.TMP', size: 14 },
+      { op: 'append', file: 'gn_db', size: 8 },
+      { op: 'append', file: 'gn_state', size: 4 },
+      { op: 'earn', amount: 90.00 },
+      { op: 'delete', file: null, which: 'NODE_A.TMP' },
+      { op: 'delete', file: null, which: 'NODE_B.TMP' },
+      { op: 'delete', file: null, which: 'NODE_C.TMP' },
+    ],
+  },
+];
+
+// installedSoftware: id -> { ...catalog entry, persistentFileIds: { key -> fileId } }
+let installedSoftware = {};
+
+// ==========================================
+// DISK MODEL
+// ==========================================
+function initDisk() {
+  disk = new Array(DISK_SIZE).fill(null);
+  // Reserve system blocks
+  for (let i = 0; i < SYSTEM_BLOCKS; i++) disk[i] = 0;
+  files[0] = { name: 'SYSTEM', color: '#0044cc', blocks: [...Array(SYSTEM_BLOCKS).keys()], created: 0, modified: 0, size: SYSTEM_BLOCKS, persistent: true };
+}
 
 const FILE_COLORS = [
   '#cc4400','#cc8800','#aacc00','#00cc44','#00ccaa','#0088cc',
   '#4400cc','#aa00cc','#cc0066','#cc2200','#66cc00','#00cc88',
   '#0066cc','#6600cc','#cc0088','#ff6600','#ffaa00','#88ff00',
+  '#dd4499','#44ddcc','#ccdd44','#ff4444',
 ];
 let colorIdx = 0;
 function nextColor() { return FILE_COLORS[colorIdx++ % FILE_COLORS.length]; }
 
-// ==========================================
-// DISK OPERATIONS
-// ==========================================
 function findFreeBlocks(count) {
   let free = [];
   for (let i = SYSTEM_BLOCKS; i < DISK_SIZE && free.length < count; i++) {
@@ -501,23 +695,42 @@ function findFreeBlocks(count) {
   return free.length >= count ? free : null;
 }
 
-function allocateFile(name, size) {
+function allocateFile(name, size, opts = {}) {
   const blocks = findFreeBlocks(size);
   if (!blocks) { log(`DISK FULL — cannot create ${name}`, 'err'); return null; }
   const id = nextFileId++;
-  const color = nextColor();
+  const color = opts.color || nextColor();
   blocks.forEach(b => disk[b] = id);
-  files[id] = { name, color, blocks: [...blocks], created: Date.now(), modified: Date.now(), size };
-  log(`Created ${name} [${size} blocks, ${blocks.length} fragments: ${countFragments(blocks)}]`, 'action');
+  files[id] = {
+    name, color,
+    blocks: [...blocks],
+    created: Date.now(),
+    modified: Date.now(),
+    size,
+    persistent: opts.persistent || false,
+    swId: opts.swId || null,
+  };
+  if (!opts.silent) log(`Created ${name} [${size} blk]`, 'action');
   return id;
 }
 
 function deleteFile(id) {
   if (!files[id] || id === 0) return false;
+  const name = files[id].name;
   files[id].blocks.forEach(b => disk[b] = null);
-  log(`Deleted ${files[id].name}`, 'action');
   delete files[id];
   if (selectedFileId === id) selectedFileId = null;
+  return true;
+}
+
+function appendFile(id, extra) {
+  const f = files[id];
+  if (!f) return false;
+  const newBlocks = findFreeBlocks(extra);
+  if (!newBlocks) return false;
+  newBlocks.forEach(b => { disk[b] = id; f.blocks.push(b); });
+  f.modified = Date.now();
+  f.size += extra;
   return true;
 }
 
@@ -526,180 +739,296 @@ function countFragments(blocks) {
   const sorted = [...blocks].sort((a,b)=>a-b);
   let frags = 1;
   for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i] !== sorted[i-1] + 1) frags++;
+    if (sorted[i] !== sorted[i-1]+1) frags++;
   }
   return frags;
 }
 
 function getFragmentation() {
-  let totalFragments = 0, totalFiles = 0;
+  let totalFragments = 0;
+  const used = disk.filter(x => x !== null && x !== 0).length;
   for (const [id, f] of Object.entries(files)) {
     if (parseInt(id) === 0) continue;
-    totalFiles++;
-    totalFragments += countFragments(f.blocks) - 1; // extra frags
+    totalFragments += countFragments(f.blocks) - 1;
   }
-  if (totalFiles === 0) return 0;
-  // score: extra fragment runs / total blocks used
-  const used = disk.filter(x => x !== null && x !== 0).length;
   if (used === 0) return 0;
   return Math.min(100, Math.round((totalFragments / Math.max(1, used)) * 200));
 }
 
-function opCreate() {
-  const name = document.getElementById('in-filename').value.trim() || 'FILE.DAT';
-  const size = parseInt(document.getElementById('in-size').value) || 8;
-  allocateFile(name.toUpperCase(), size);
-  render();
-}
-
-function opDelete() {
-  if (!selectedFileId) { log('No file selected', 'warn'); return; }
-  deleteFile(selectedFileId);
-  render();
-}
-
-function opAppend() {
-  if (!selectedFileId) { log('No file selected', 'warn'); return; }
-  const f = files[selectedFileId];
-  const extra = parseInt(document.getElementById('in-size').value) || 4;
-  const newBlocks = findFreeBlocks(extra);
-  if (!newBlocks) { log('DISK FULL', 'err'); return; }
-  newBlocks.forEach(b => { disk[b] = selectedFileId; f.blocks.push(b); });
-  f.modified = Date.now();
-  f.size += extra;
-  log(`Appended ${extra} blocks to ${f.name} — now ${countFragments(f.blocks)} fragments`, 'action');
-  render();
-}
-
-function opRename() {
-  if (!selectedFileId) { log('No file selected', 'warn'); return; }
-  const newName = document.getElementById('in-filename').value.trim().toUpperCase();
-  files[selectedFileId].name = newName;
-  files[selectedFileId].modified = Date.now();
-  log(`Renamed to ${newName}`, 'action');
-  render();
-}
-
-function opModify() {
-  if (!selectedFileId) { log('No file selected', 'warn'); return; }
-  files[selectedFileId].modified = Date.now();
-  log(`Modified ${files[selectedFileId].name} (timestamp updated)`, 'action');
-  render();
-}
-
-// BULK OPS
-const adjectives = ['ALPHA','BETA','GAMMA','DATA','TEMP','CACHE','USER','APP','LOG','IMG','VID','DOC','SYS','NET','BIN','LIB'];
-const exts = ['DAT','TMP','LOG','EXE','DLL','BMP','WAV','TXT','DB','CAB'];
-function rndName() {
-  return adjectives[Math.floor(Math.random()*adjectives.length)] + Math.floor(Math.random()*999) + '.' + exts[Math.floor(Math.random()*exts.length)];
-}
-function rndSize(min=3, max=20) { return min + Math.floor(Math.random()*(max-min)); }
-
-function bulkCreate() {
-  const count = parseInt(document.getElementById('in-bulk-count').value) || 10;
-  for (let i = 0; i < count; i++) {
-    allocateFile(rndName(), rndSize(2, 18));
+// ==========================================
+// RAM TRACKING
+// ==========================================
+function getRamUsed() {
+  let used = 0;
+  for (const [id, sw] of Object.entries(installedSoftware)) {
+    if (swRuntime[id] && swRuntime[id].running) used += sw.ramReq;
   }
-  log(`Bulk created ${count} files`, 'warn');
-  render();
+  return used;
 }
 
-function bulkDeleteRandom() {
-  const count = parseInt(document.getElementById('in-bulk-count').value) || 5;
-  const ids = Object.keys(files).map(Number).filter(id => id !== 0);
-  for (let i = 0; i < count && ids.length > 0; i++) {
-    const idx = Math.floor(Math.random() * ids.length);
-    deleteFile(ids.splice(idx, 1)[0]);
-  }
-  log(`Bulk deleted ${count} files`, 'warn');
-  render();
-}
-
-function bulkCreateDelete() {
-  const count = parseInt(document.getElementById('in-bulk-count').value) || 8;
-  // Create some
-  const created = [];
-  for (let i = 0; i < count; i++) created.push(allocateFile(rndName(), rndSize(2, 12)));
-  // Delete every other
-  for (let i = 0; i < created.length; i += 2) { if (created[i]) deleteFile(created[i]); }
-  // Create more smaller files to fill gaps
-  for (let i = 0; i < Math.ceil(count/2); i++) allocateFile(rndName(), rndSize(8, 20));
-  log(`Create+Delete cycle completed — fragmentation increased!`, 'warn');
-  render();
-}
-
-function bulkAppendAll() {
-  const ids = Object.keys(files).map(Number).filter(id => id !== 0);
-  for (const id of ids) {
-    const extra = rndSize(1, 5);
-    const newBlocks = findFreeBlocks(extra);
-    if (!newBlocks) break;
-    newBlocks.forEach(b => { disk[b] = id; files[id].blocks.push(b); });
-    files[id].modified = Date.now();
-    files[id].size += extra;
-  }
-  log(`Appended to all ${ids.length} files — heavy fragmentation!`, 'warn');
-  render();
-}
+function getRamFree() { return RAM_SIZE - getRamUsed(); }
 
 // ==========================================
-// MACRO SYSTEM
+// SOFTWARE SYSTEM
 // ==========================================
-let macroOps = [];
-
-function macroAdd() {
-  const op = document.getElementById('macro-op-select').value;
-  macroOps.push(op);
-  renderMacro();
-}
-
-function macroRemove(i) {
-  macroOps.splice(i, 1);
-  renderMacro();
-}
-
-function macroClear() {
-  macroOps = [];
-  renderMacro();
-}
-
-async function macroRun() {
-  const repeat = parseInt(document.getElementById('macro-repeat').value) || 5;
-  if (macroOps.length === 0) { log('Macro is empty!', 'warn'); return; }
-  log(`Running macro x${repeat}...`, 'warn');
-  for (let r = 0; r < repeat; r++) {
-    for (const op of macroOps) {
-      switch(op) {
-        case 'create': allocateFile(rndName(), rndSize()); break;
-        case 'append': {
-          const ids = Object.keys(files).map(Number).filter(id => id !== 0);
-          if (ids.length) { const id = ids[Math.floor(Math.random()*ids.length)]; const nb = findFreeBlocks(rndSize(1,5)); if (nb) { nb.forEach(b=>{disk[b]=id;files[id].blocks.push(b);}); files[id].size += nb.length; files[id].modified = Date.now(); } }
-          break;
-        }
-        case 'delete': { const ids = Object.keys(files).map(Number).filter(id => id !== 0); if (ids.length) deleteFile(ids[Math.floor(Math.random()*ids.length)]); break; }
-        case 'bulkCreate': { for(let i=0;i<5;i++) allocateFile(rndName(), rndSize()); break; }
-        case 'bulkDelete': { const ids = Object.keys(files).map(Number).filter(id => id !== 0); for(let i=0;i<3&&ids.length;i++) { const ix=Math.floor(Math.random()*ids.length); deleteFile(ids.splice(ix,1)[0]); } break; }
-        case 'bulkCycle': bulkCreateDelete(); break;
-        case 'appendAll': { const ids2 = Object.keys(files).map(Number).filter(id => id !== 0); for(const id of ids2) { const nb = findFreeBlocks(rndSize(1,3)); if(nb){nb.forEach(b=>{disk[b]=id;files[id].blocks.push(b);}); files[id].size+=nb.length; files[id].modified=Date.now();} } break; }
-      }
+function installSoftware(swDef) {
+  const sw = { ...swDef, persistentFileIds: {} };
+  // Create persistent files
+  for (const pf of sw.persistentFiles) {
+    const id = allocateFile(pf.name, pf.size, { persistent: true, swId: sw.id, silent: true });
+    if (id === null) {
+      log(`INSTALL FAILED: disk full for ${sw.name}`, 'err');
+      return false;
     }
-    render();
-    await sleep(10);
+    sw.persistentFileIds[pf.key] = id;
   }
-  log(`Macro completed x${repeat}`, 'action');
+  installedSoftware[sw.id] = sw;
+  swRuntime[sw.id] = { running: false, looping: false, stepIndex: 0, progress: 0, tmpFiles: {}, stopRequested: false };
+  log(`Installed ${sw.name}`, 'action');
+  render();
+  return true;
+}
+
+async function runSoftware(swId) {
+  const sw = installedSoftware[swId];
+  const rt = swRuntime[swId];
+  if (!sw || !rt) return;
+  if (rt.running) return;
+
+  // Check RAM
+  if (getRamFree() < sw.ramReq) {
+    log(`${sw.name}: NOT ENOUGH RAM (need ${sw.ramReq} KB, free: ${getRamFree()} KB)`, 'err');
+    return;
+  }
+
+  // Check persistent files exist
+  for (const pf of sw.persistentFiles) {
+    const fid = sw.persistentFileIds[pf.key];
+    if (!files[fid]) {
+      log(`${sw.name}: CRASH — missing file ${pf.name}!`, 'crash');
+      rt.running = false;
+      rt.crashed = true;
+      render();
+      return;
+    }
+  }
+
+  rt.running = true;
+  rt.crashed = false;
+  rt.stopRequested = false;
+  rt.tmpFiles = {};
+  log(`${sw.name}: starting...`, 'action');
+  render();
+
+  do {
+    // Execute ops
+    for (let i = 0; i < sw.ops.length; i++) {
+      if (!rt.running || rt.stopRequested) break;
+      const op = sw.ops[i];
+      rt.stepIndex = i;
+      rt.progress = i / sw.ops.length;
+      renderSoftwareCard(swId);
+      await sleep(80);
+
+      try {
+        await executeSoftwareOp(sw, rt, op);
+      } catch(e) {
+        log(`${sw.name}: CRASH — ${e.message}`, 'crash');
+        rt.running = false;
+        rt.crashed = true;
+        // Clean up tmp files
+        for (const k of Object.keys(rt.tmpFiles)) { if (rt.tmpFiles[k]) deleteFile(rt.tmpFiles[k]); }
+        rt.tmpFiles = {};
+        render();
+        return;
+      }
+
+      render();
+      await sleep(50);
+    }
+
+    if (rt.stopRequested) break;
+
+    if (sw.isServer && rt.running) {
+      rt.progress = 1;
+      renderSoftwareCard(swId);
+      await sleep(200);
+    }
+
+  } while (sw.isServer && rt.running && !rt.stopRequested);
+
+  // Clean up remaining tmp files
+  for (const k of Object.keys(rt.tmpFiles)) { if (rt.tmpFiles[k]) deleteFile(rt.tmpFiles[k]); }
+  rt.tmpFiles = {};
+  rt.running = false;
+  rt.looping = false;
+  rt.progress = 0;
+  log(`${sw.name}: completed`, 'action');
   render();
 }
 
-function renderMacro() {
-  const el = document.getElementById('macro-list');
-  if (macroOps.length === 0) { el.innerHTML = '<div style="color:var(--green-dim);font-size:10px;padding:2px">Empty — add operations above</div>'; return; }
-  el.innerHTML = macroOps.map((op, i) => `
-    <div class="macro-item">
-      <span style="color:var(--green-dim);font-size:10px">${String(i+1).padStart(2,'0')}.</span>
-      <span class="macro-op">${op}</span>
-      <span class="macro-del" onclick="macroRemove(${i})">✕</span>
-    </div>
-  `).join('');
+async function executeSoftwareOp(sw, rt, op) {
+  switch(op.op) {
+    case 'read': {
+      const fid = sw.persistentFileIds[op.file];
+      if (!files[fid]) throw new Error(`file ${op.file} missing`);
+      // Flash some blocks
+      const f = files[fid];
+      if (f && f.blocks.length > 0) {
+        flashBlock(f.blocks[0], 'defrag-read');
+      }
+      await sleep(30);
+      break;
+    }
+    case 'create': {
+      const name = op.name || 'TMP.DAT';
+      const size = op.size || 4;
+      const fid = allocateFile(name, size, { silent: true, swId: sw.id });
+      if (fid === null) throw new Error('disk full');
+      // Track by name for delete-by-name
+      const key = op.which || name;
+      rt.tmpFiles[key] = fid;
+      break;
+    }
+    case 'append': {
+      let fid;
+      if (op.file) {
+        fid = sw.persistentFileIds[op.file];
+      } else {
+        // append to most recent tmp
+        const keys = Object.keys(rt.tmpFiles);
+        if (keys.length === 0) throw new Error('no tmp file to append');
+        fid = rt.tmpFiles[keys[keys.length - 1]];
+      }
+      if (!files[fid]) throw new Error('target file missing');
+      const ok = appendFile(fid, op.size || 2);
+      if (!ok) throw new Error('disk full during append');
+      break;
+    }
+    case 'delete': {
+      let fid;
+      if (op.which) {
+        fid = rt.tmpFiles[op.which];
+      } else if (op.file) {
+        fid = sw.persistentFileIds[op.file];
+      } else {
+        // delete last tmp
+        const keys = Object.keys(rt.tmpFiles);
+        if (keys.length === 0) return;
+        const k = keys[keys.length - 1];
+        fid = rt.tmpFiles[k];
+        delete rt.tmpFiles[k];
+      }
+      if (fid && files[fid]) {
+        const key = Object.entries(rt.tmpFiles).find(([k,v]) => v === fid);
+        if (key) delete rt.tmpFiles[key[0]];
+        deleteFile(fid);
+      }
+      break;
+    }
+    case 'earn': {
+      earnMoney(op.amount, sw.name);
+      break;
+    }
+  }
+}
+
+function stopSoftware(swId) {
+  const rt = swRuntime[swId];
+  if (rt) { rt.stopRequested = true; }
+}
+
+function reinstallSoftware(swId) {
+  const sw = installedSoftware[swId];
+  if (!sw) return;
+  log(`Reinstalling ${sw.name}...`, 'warn');
+  // Delete old persistent files
+  for (const [key, fid] of Object.entries(sw.persistentFileIds)) {
+    if (files[fid]) deleteFile(fid);
+  }
+  sw.persistentFileIds = {};
+  // Recreate
+  for (const pf of sw.persistentFiles) {
+    const id = allocateFile(pf.name, pf.size, { persistent: true, swId: sw.id, silent: true });
+    if (id === null) { log(`REINSTALL FAILED: disk full`, 'err'); return; }
+    sw.persistentFileIds[pf.key] = id;
+  }
+  swRuntime[swId].crashed = false;
+  swRuntime[swId].running = false;
+  log(`${sw.name}: reinstalled`, 'action');
+  render();
+}
+
+// ==========================================
+// MONEY
+// ==========================================
+function earnMoney(amount, source) {
+  playerMoney += amount;
+  log(`+$${amount.toFixed(2)} earned by ${source}`, 'money');
+  showMoneyAnim(amount);
+  renderMoney();
+}
+
+function spendMoney(amount) {
+  if (playerMoney < amount) return false;
+  playerMoney -= amount;
+  renderMoney();
+  return true;
+}
+
+function showMoneyAnim(amount) {
+  const el = document.createElement('div');
+  el.className = 'money-earn-anim';
+  el.textContent = `+$${amount.toFixed(2)}`;
+  const x = 60 + Math.random() * 100;
+  const y = 30 + Math.random() * 30;
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 1600);
+}
+
+function renderMoney() {
+  document.getElementById('money-display').textContent = `$ ${playerMoney.toFixed(2)}`;
+}
+
+// ==========================================
+// SHOP
+// ==========================================
+function buyShopItem(itemId) {
+  const item = SHOP_UPGRADES.find(i => i.id === itemId);
+  if (!item || item.bought) return;
+  if (RAM_SIZE < item.ramReq) { log(`Need ${item.ramReq} KB RAM to buy ${item.name}`, 'err'); return; }
+  if (!spendMoney(item.price)) { log(`Not enough money for ${item.name}`, 'err'); return; }
+  item.bought = true;
+  if (item.type === 'hdd') {
+    expandDisk(item.value);
+  } else if (item.type === 'ram') {
+    RAM_SIZE = item.value;
+    log(`RAM upgraded to ${RAM_SIZE} KB`, 'action');
+  }
+  renderShop();
+  renderStats();
+}
+
+function expandDisk(newSize) {
+  if (newSize <= DISK_SIZE) return;
+  const old = DISK_SIZE;
+  DISK_SIZE = newSize;
+  disk.length = DISK_SIZE;
+  for (let i = old; i < DISK_SIZE; i++) disk[i] = null;
+  log(`HDD expanded to ${DISK_SIZE} blocks!`, 'action');
+  document.querySelector('.header .subtitle').textContent = `MIRACULOUS DISK DEFRAGMENTER — C:\\ DRIVE — ${DISK_SIZE} BLOCKS`;
+}
+
+function buySoftware(swId) {
+  const swDef = SOFTWARE_CATALOG.find(s => s.id === swId);
+  if (!swDef) return;
+  if (installedSoftware[swId]) { log(`${swDef.name} already installed`, 'warn'); return; }
+  if (RAM_SIZE < swDef.ramReq) { log(`Need ${swDef.ramReq} KB RAM to install ${swDef.name}`, 'err'); return; }
+  if (!spendMoney(swDef.price)) { log(`Not enough money for ${swDef.name}`, 'err'); return; }
+  installSoftware(swDef);
+  renderShop();
 }
 
 // ==========================================
@@ -713,11 +1042,10 @@ async function startDefrag() {
   document.getElementById('defrag-status').textContent = 'ANALYZING...';
   const mode = document.getElementById('defrag-mode').value;
   const speed = parseInt(document.getElementById('defrag-speed').value);
-
   log(`Starting DEFRAG — Mode: ${mode.toUpperCase()}`, 'defrag');
   await sleep(400);
   await runDefrag(mode, speed);
-  if (defragRunning) { // didn't get stopped
+  if (defragRunning) {
     document.getElementById('defrag-status').textContent = 'DEFRAG COMPLETE ✓';
     document.getElementById('defrag-progress').style.width = '100%';
     log('Defragmentation complete!', 'defrag');
@@ -737,41 +1065,20 @@ function stopDefrag() {
 }
 
 async function runDefrag(mode, speed) {
-  // Build target layout based on mode
   let fileOrder = Object.keys(files).map(Number).filter(id => id >= 0);
-
-  if (mode === 'simple') {
-    // Just pack files, no reordering
+  if (mode === 'simple' || mode === 'consolidate') {
     fileOrder.sort((a,b) => {
-      if (a === 0) return -1; if (b === 0) return 1;
-      const minA = Math.min(...files[a].blocks);
-      const minB = Math.min(...files[b].blocks);
-      return minA - minB;
-    });
-  } else if (mode === 'consolidate') {
-    // System first, then files in current order, pack together, free at end
-    fileOrder.sort((a,b) => {
-      if (a === 0) return -1; if (b === 0) return 1;
+      if (a===0) return -1; if (b===0) return 1;
       return Math.min(...files[a].blocks) - Math.min(...files[b].blocks);
     });
   } else if (mode === 'byname') {
-    fileOrder.sort((a,b) => {
-      if (a === 0) return -1; if (b === 0) return 1;
-      return files[a].name.localeCompare(files[b].name);
-    });
+    fileOrder.sort((a,b) => { if (a===0) return -1; if (b===0) return 1; return files[a].name.localeCompare(files[b].name); });
   } else if (mode === 'bydate') {
-    fileOrder.sort((a,b) => {
-      if (a === 0) return -1; if (b === 0) return 1;
-      return files[a].modified - files[b].modified;
-    });
+    fileOrder.sort((a,b) => { if (a===0) return -1; if (b===0) return 1; return files[a].modified - files[b].modified; });
   } else if (mode === 'bysize') {
-    fileOrder.sort((a,b) => {
-      if (a === 0) return -1; if (b === 0) return 1;
-      return files[b].size - files[a].size;
-    });
+    fileOrder.sort((a,b) => { if (a===0) return -1; if (b===0) return 1; return files[b].size - files[a].size; });
   }
 
-  // Build ideal disk layout
   let ideal = new Array(DISK_SIZE).fill(null);
   let cursor = 0;
   for (const id of fileOrder) {
@@ -782,86 +1089,132 @@ async function runDefrag(mode, speed) {
     cursor += size;
   }
 
-  // Now animate moving blocks from current to ideal
-  const totalMoves = countDifferences(disk, ideal);
   let moves = 0;
-
   for (let targetPos = 0; targetPos < DISK_SIZE; targetPos++) {
     if (!defragRunning) return;
     const wantedId = ideal[targetPos];
-    if (disk[targetPos] === wantedId) continue; // already correct
+    if (disk[targetPos] === wantedId) continue;
 
-    // Find wantedId somewhere on disk
     if (wantedId !== null) {
-      // Find a block of this file that isn't in its ideal position
       let sourcePos = -1;
       for (let i = 0; i < DISK_SIZE; i++) {
         if (disk[i] === wantedId && ideal[i] !== wantedId) { sourcePos = i; break; }
       }
-      if (sourcePos === -1) {
-        // Find any block of this file
-        for (let i = 0; i < DISK_SIZE; i++) {
-          if (disk[i] === wantedId) { sourcePos = i; break; }
-        }
-      }
+      if (sourcePos === -1) for (let i = 0; i < DISK_SIZE; i++) { if (disk[i] === wantedId) { sourcePos = i; break; } }
       if (sourcePos === -1) continue;
 
-      // Flash source read
       flashBlock(sourcePos, 'defrag-read');
       await sleep(speed * 0.4);
 
-      // Move: if target has something, it needs to go somewhere else first
       if (disk[targetPos] !== null) {
-        // Find free spot to temporarily park it
         let park = -1;
-        for (let i = DISK_SIZE - 1; i >= 0; i--) {
-          if (disk[i] === null) { park = i; break; }
-        }
+        for (let i = DISK_SIZE - 1; i >= 0; i--) { if (disk[i] === null) { park = i; break; } }
         if (park !== -1) {
-          // park current occupant
           const displaced = disk[targetPos];
           disk[park] = displaced;
           disk[targetPos] = null;
           const f = files[displaced];
-          if (f) {
-            const bi = f.blocks.indexOf(targetPos);
-            if (bi !== -1) f.blocks[bi] = park;
-          }
+          if (f) { const bi = f.blocks.indexOf(targetPos); if (bi !== -1) f.blocks[bi] = park; }
         }
       }
 
-      // Now move source to target
       disk[targetPos] = wantedId;
       disk[sourcePos] = null;
       const f = files[wantedId];
-      if (f) {
-        const bi = f.blocks.indexOf(sourcePos);
-        if (bi !== -1) f.blocks[bi] = targetPos;
-      }
+      if (f) { const bi = f.blocks.indexOf(sourcePos); if (bi !== -1) f.blocks[bi] = targetPos; }
 
       flashBlock(targetPos, 'defrag-write');
       moves++;
-
       const pct = Math.min(99, Math.round((targetPos / DISK_SIZE) * 100));
       document.getElementById('defrag-progress').style.width = pct + '%';
       document.getElementById('defrag-status').textContent = `DEFRAGGING... ${pct}%  [${moves} MOVES]`;
-
       if (moves % 3 === 0) { render(); await sleep(speed); }
     }
   }
-
   render();
-}
-
-function countDifferences(a, b) {
-  let d = 0;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
-  return d;
 }
 
 function flashBlock(pos, cls) {
   const el = document.querySelector(`[data-block="${pos}"]`);
   if (el) { el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 200); }
+}
+
+// ==========================================
+// MANUAL FS OPS
+// ==========================================
+function opCreate() {
+  const name = (document.getElementById('in-filename').value.trim() || 'FILE.DAT').toUpperCase();
+  const size = parseInt(document.getElementById('in-size').value) || 8;
+  allocateFile(name, size);
+  render();
+}
+function opDelete() {
+  if (!selectedFileId || selectedFileId === 0) { log('No file selected', 'warn'); return; }
+  const f = files[selectedFileId];
+  // if (f && f.persistent) { log(`Cannot delete ${f.name} — managed by software`, 'warn'); return; }
+  deleteFile(selectedFileId);
+  render();
+}
+function opAppend() {
+  if (!selectedFileId) { log('No file selected', 'warn'); return; }
+  const extra = parseInt(document.getElementById('in-size').value) || 4;
+  appendFile(selectedFileId, extra);
+  log(`Appended ${extra} blocks to ${files[selectedFileId]?.name}`, 'action');
+  render();
+}
+function opRename() {
+  if (!selectedFileId) { log('No file selected', 'warn'); return; }
+  const newName = document.getElementById('in-filename').value.trim().toUpperCase();
+  files[selectedFileId].name = newName;
+  files[selectedFileId].modified = Date.now();
+  log(`Renamed to ${newName}`, 'action');
+  render();
+}
+function opModify() {
+  if (!selectedFileId) { log('No file selected', 'warn'); return; }
+  files[selectedFileId].modified = Date.now();
+  log(`Modified ${files[selectedFileId].name}`, 'action');
+  render();
+}
+
+const adjectives = ['ALPHA','BETA','GAMMA','DATA','TEMP','CACHE','USER','APP','LOG','IMG','VID','DOC','SYS','NET','BIN','LIB'];
+const exts = ['DAT','TMP','LOG','BMP','WAV','TXT','DB','CAB'];
+function rndName() { return adjectives[Math.floor(Math.random()*adjectives.length)] + Math.floor(Math.random()*999) + '.' + exts[Math.floor(Math.random()*exts.length)]; }
+function rndSize(min=3, max=20) { return min + Math.floor(Math.random()*(max-min)); }
+
+function bulkCreate() {
+  const count = parseInt(document.getElementById('in-bulk-count').value) || 10;
+  for (let i = 0; i < count; i++) allocateFile(rndName(), rndSize(2, 18), {silent:true});
+  log(`Bulk created ${count} files`, 'warn');
+  render();
+}
+function bulkDeleteRandom() {
+  const count = parseInt(document.getElementById('in-bulk-count').value) || 5;
+  const ids = Object.keys(files).map(Number).filter(id => id !== 0 && !files[id].persistent);
+  for (let i = 0; i < count && ids.length > 0; i++) {
+    const idx = Math.floor(Math.random() * ids.length);
+    deleteFile(ids.splice(idx, 1)[0]);
+  }
+  log(`Bulk deleted up to ${count} files`, 'warn');
+  render();
+}
+function bulkCreateDelete() {
+  const count = parseInt(document.getElementById('in-bulk-count').value) || 8;
+  const created = [];
+  for (let i = 0; i < count; i++) created.push(allocateFile(rndName(), rndSize(2, 12), {silent:true}));
+  for (let i = 0; i < created.length; i += 2) { if (created[i]) deleteFile(created[i]); }
+  for (let i = 0; i < Math.ceil(count/2); i++) allocateFile(rndName(), rndSize(8, 20), {silent:true});
+  log(`Create+Delete cycle done — fragmentation increased!`, 'warn');
+  render();
+}
+function bulkAppendAll() {
+  const ids = Object.keys(files).map(Number).filter(id => id !== 0);
+  for (const id of ids) {
+    const extra = rndSize(1, 5);
+    appendFile(id, extra);
+  }
+  log(`Appended to all files — heavy fragmentation!`, 'warn');
+  render();
 }
 
 // ==========================================
@@ -871,22 +1224,17 @@ function render() {
   renderDiskMap();
   renderFileList();
   renderStats();
+  renderSoftwareList();
+  renderShop();
 }
 
 function renderDiskMap() {
   const map = document.getElementById('disk-map');
-  // Set columns
   map.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
-
-  // Use document fragment for performance
   const frag = document.createDocumentFragment();
   for (let i = 0; i < DISK_SIZE; i++) {
     let el = document.querySelector(`[data-block="${i}"]`);
-    if (!el) {
-      el = document.createElement('div');
-      el.className = 'block';
-      el.dataset.block = i;
-    }
+    if (!el) { el = document.createElement('div'); el.className = 'block'; el.dataset.block = i; }
     const id = disk[i];
     if (id === null) {
       el.className = 'block free';
@@ -896,18 +1244,11 @@ function renderDiskMap() {
     } else {
       el.className = 'block used';
       const f = files[id];
-      const color = f ? f.color : '#444';
-      el.style.background = color;
+      el.style.background = f ? f.color : '#444';
       el.style.border = 'none';
       el.dataset.tip = f ? `Block ${i}: ${f.name}` : `Block ${i}`;
-      // highlight selected file
-      if (id === selectedFileId) {
-        el.style.filter = 'brightness(1.8)';
-        el.style.outline = '1px solid white';
-      } else {
-        el.style.filter = '';
-        el.style.outline = '';
-      }
+      if (id === selectedFileId) { el.style.filter = 'brightness(1.8)'; el.style.outline = '1px solid white'; }
+      else { el.style.filter = ''; el.style.outline = ''; }
     }
     frag.appendChild(el);
   }
@@ -917,14 +1258,10 @@ function renderDiskMap() {
 
 function renderFileList() {
   const el = document.getElementById('file-list');
-  const ids = Object.keys(files).map(Number).filter(id => id !== 0).sort((a,b) => files[a].name.localeCompare(files[b].name));
-
-  // Update legend
   const legend = document.getElementById('legend-files');
   legend.innerHTML = '';
-
-  if (ids.length === 0) { el.innerHTML = '<div style="color:var(--green-dim);font-size:11px;padding:4px">No files — create some!</div>'; return; }
-
+  const ids = Object.keys(files).map(Number).filter(id => id !== 0).sort((a,b) => files[a].name.localeCompare(files[b].name));
+  if (ids.length === 0) { el.innerHTML = '<div style="color:var(--green-dim);font-size:11px;padding:4px">No files</div>'; return; }
   el.innerHTML = '';
   for (const id of ids) {
     const f = files[id];
@@ -935,13 +1272,11 @@ function renderFileList() {
     item.onclick = () => { selectedFileId = (selectedFileId === id) ? null : id; render(); };
     item.innerHTML = `
       <div class="file-dot" style="background:${f.color}"></div>
-      <span class="file-name" title="${f.name}">${f.name}</span>
-      <span class="file-size">${f.blocks.length}blk</span>
+      <span class="file-name" title="${f.name}">${f.name}${f.persistent ? ' 🔒' : ''}</span>
+      <span class="file-size">${f.blocks.length}b</span>
       <span class="file-frag ${isFrag?'bad':'ok'}">${frags}F</span>
     `;
     el.appendChild(item);
-
-    // Legend entry
     const li = document.createElement('div');
     li.className = 'legend-item';
     li.innerHTML = `<div class="legend-dot" style="background:${f.color}"></div>`;
@@ -954,10 +1289,13 @@ function renderStats() {
   const free = DISK_SIZE - used;
   const files_count = Object.keys(files).filter(id => parseInt(id) !== 0).length;
   const frag = getFragmentation();
+  const ramUsed = getRamUsed();
 
   document.getElementById('stat-used').textContent = `${used} BLK`;
   document.getElementById('stat-free').textContent = `${free} BLK`;
   document.getElementById('stat-files').textContent = files_count;
+  document.getElementById('stat-capacity').textContent = `${DISK_SIZE} BLK`;
+  document.getElementById('stat-ram').textContent = `${RAM_SIZE} KB`;
 
   const fragEl = document.getElementById('stat-frag');
   fragEl.textContent = `${frag}%`;
@@ -967,6 +1305,131 @@ function renderStats() {
   else fragEl.style.color = 'var(--green)';
 
   document.getElementById('frag-meter').style.width = frag + '%';
+
+  // HW panel
+  document.getElementById('hw-ram').textContent = `${RAM_SIZE} KB`;
+  document.getElementById('hw-ram-used').textContent = `${ramUsed} KB`;
+  document.getElementById('hw-hdd').textContent = `${DISK_SIZE} BLK`;
+  const ramPct = RAM_SIZE > 0 ? (ramUsed / RAM_SIZE * 100) : 0;
+  document.getElementById('ram-fill').style.width = `${ramPct}%`;
+}
+
+function renderSoftwareList() {
+  const el = document.getElementById('software-list');
+  const ids = Object.keys(installedSoftware);
+  if (ids.length === 0) {
+    el.innerHTML = '<div style="color:var(--green-dim);font-size:11px">No software installed</div>';
+    return;
+  }
+  el.innerHTML = '';
+  for (const id of ids) {
+    renderSoftwareCard(id, el);
+  }
+}
+
+function renderSoftwareCard(swId, container) {
+  const sw = installedSoftware[swId];
+  const rt = swRuntime[swId];
+  if (!sw || !rt) return;
+
+  let card = document.getElementById(`sw-card-${swId}`);
+  const isNew = !card;
+  if (isNew) {
+    card = document.createElement('div');
+    card.id = `sw-card-${swId}`;
+    card.className = 'software-card';
+  }
+
+  const running = rt.running;
+  const crashed = rt.crashed;
+  card.className = `software-card${running ? ' running' : ''}${crashed ? ' crashed' : ''}`;
+
+  const pct = Math.round((rt.progress || 0) * 100);
+  const badgeColor = sw.badgeType === 'server' ? 'var(--magenta)' : 'var(--green-dim)';
+
+  // Check missing files
+  let missingFiles = [];
+  for (const pf of sw.persistentFiles) {
+    if (!files[sw.persistentFileIds[pf.key]]) missingFiles.push(pf.name);
+  }
+  const hasMissing = missingFiles.length > 0;
+  if (hasMissing && !rt.running) { rt.crashed = true; }
+
+  let btnHtml = '';
+  if (running) {
+    if (sw.isServer) {
+      btnHtml = `<button class="btn stop-btn sw-btn" onclick="stopSoftware('${swId}')">■ STOP</button>`;
+    }
+    // non-server: just show running, no stop
+  } else if (crashed || hasMissing) {
+    btnHtml = `<button class="btn danger sw-btn" onclick="reinstallSoftware('${swId}')">↺ REINSTALL</button>`;
+  } else {
+    const canRun = getRamFree() >= sw.ramReq || running;
+    btnHtml = `<button class="btn run sw-btn" onclick="runSoftware('${swId}')" ${canRun?'':'disabled'}>▶ RUN</button>`;
+  }
+
+  card.innerHTML = `
+    <div class="sw-header">
+      <span class="sw-name ${running?'running-name':crashed?'crashed-name':''}">${sw.name}</span>
+      <span class="sw-badge ${sw.badgeType}">${sw.badgeType === 'server' ? '⟳ SERVER' : '▶ PROG'}</span>
+    </div>
+    <div class="sw-info">
+      RAM: <span>${sw.ramReq} KB</span> &nbsp; 
+      Files: <span>${sw.persistentFiles.length}</span>
+      ${crashed || hasMissing ? `<br><span style="color:var(--red)">⚠ CRASHED${hasMissing?' — missing: '+missingFiles.join(', '):''}</span>` : ''}
+    </div>
+    ${running ? `<div class="sw-progress"><div class="sw-progress-fill" style="width:${pct}%"></div></div>` : ''}
+    <div class="sw-btn-row">${btnHtml}</div>
+  `;
+
+  if (isNew && container) container.appendChild(card);
+}
+
+function renderShop() {
+  const swEl = document.getElementById('shop-list');
+  swEl.innerHTML = '';
+
+  // HW upgrades
+  for (const item of SHOP_UPGRADES) {
+    if (item.bought) continue;
+    const canAfford = playerMoney >= item.price;
+    const hasRam = RAM_SIZE >= item.ramReq;
+    const div = document.createElement('div');
+    div.className = 'shop-item';
+    div.innerHTML = `
+      <div class="shop-name">${item.name}</div>
+      <div class="shop-desc">${item.desc}</div>
+      ${item.ramReq > 0 ? `<div class="shop-req">Requires: ${item.ramReq} KB RAM</div>` : ''}
+      <div class="shop-price">$${item.price.toFixed(2)}</div>
+      <button class="btn gold-btn" style="margin-top:3px;font-size:11px;" onclick="buyShopItem('${item.id}')" ${canAfford && hasRam ? '' : 'disabled'}>
+        ${canAfford && hasRam ? '▶ BUY' : canAfford ? '⚠ NEED RAM' : '⚠ NEED $' + (item.price - playerMoney).toFixed(2)}
+      </button>
+    `;
+    swEl.appendChild(div);
+  }
+
+  // Software purchases
+  for (const swDef of SOFTWARE_CATALOG) {
+    if (installedSoftware[swDef.id] || swDef.price === 0) continue;
+    const canAfford = playerMoney >= swDef.price;
+    const hasRam = RAM_SIZE >= swDef.ramReq;
+    const div = document.createElement('div');
+    div.className = 'shop-item';
+    div.innerHTML = `
+      <div class="shop-name">${swDef.name}</div>
+      <div class="shop-desc">${swDef.desc}</div>
+      <div class="shop-req">Requires: ${swDef.ramReq} KB RAM</div>
+      <div class="shop-price">$${swDef.price.toFixed(2)}</div>
+      <button class="btn gold-btn" style="margin-top:3px;font-size:11px;" onclick="buySoftware('${swDef.id}')" ${canAfford && hasRam ? '' : 'disabled'}>
+        ${canAfford && hasRam ? '▶ INSTALL' : canAfford ? '⚠ NEED RAM' : '⚠ NEED $' + (swDef.price - playerMoney).toFixed(2)}
+      </button>
+    `;
+    swEl.appendChild(div);
+  }
+
+  if (swEl.children.length === 0) {
+    swEl.innerHTML = '<div style="color:var(--green-dim);font-size:11px">All items purchased!</div>';
+  }
 }
 
 // ==========================================
@@ -980,8 +1443,7 @@ function log(msg, type = '') {
   line.textContent = `[${ts}] ${msg}`;
   logEl().appendChild(line);
   logEl().scrollTop = logEl().scrollHeight;
-  // Keep log from growing too large
-  while (logEl().children.length > 80) logEl().removeChild(logEl().firstChild);
+  while (logEl().children.length > 100) logEl().removeChild(logEl().firstChild);
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -990,28 +1452,34 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // INIT
 // ==========================================
 function init() {
-  renderMacro();
-  // Pre-create some files to get started
-  log('System initialized — C:\\ drive online', 'action');
-  log('Create files to increase fragmentation, then run DEFRAG!', '');
-  allocateFile('DOORS.EXE', 20);
-  allocateFile('KERNEL32.DLL', 12);
-  allocateFile('EXPLORER.EXE', 15);
-  allocateFile('README.TXT', 4);
-  allocateFile('CONFIG.SYS', 3);
-  allocateFile('AUTOEXEC.BAT', 2);
-  // Delete some to create gaps
-  const ids = Object.keys(files).map(Number).filter(id => id > 0);
-  deleteFile(ids[1]); // delete KERNEL32 to create gap
-  deleteFile(ids[3]); // delete README
-  // Create more to fill gaps unevenly
-  allocateFile('TEMP001.DAT', 18);
-  allocateFile('CACHE.TMP', 8);
-  allocateFile('PAGEFILE.SYS', 25);
-  deleteFile(ids[0]); // delete DOORS
-  allocateFile('MSDOS.SYS', 30);
-  allocateFile('IO.SYS', 6);
-  log('Initial files created — fragmentation: ' + getFragmentation() + '%', 'warn');
+  initDisk();
+  log('DEFRAG.EXE v4.2 — System initialized', 'action');
+  log('C:\\ drive online — 512 blocks', '');
+
+  // Auto-install starter software
+  const starter = SOFTWARE_CATALOG.find(s => s.id === 'sw_ledger');
+  installSoftware(starter);
+
+  // Seed some initial files for visual interest
+  allocateFile('PAGEFILE.SYS', 16, {silent:true});
+  allocateFile('AUTOEXEC.BAT', 2, {silent:true});
+  allocateFile('CONFIG.SYS', 3, {silent:true});
+  const id1 = allocateFile('TEMP001.DAT', 12, {silent:true});
+  const id2 = allocateFile('CACHE.TMP', 8, {silent:true});
+  allocateFile('MSDOS.SYS', 10, {silent:true});
+  // Create some gaps
+  if (id1) deleteFile(id1);
+  allocateFile('IO.SYS', 6, {silent:true});
+  if (id2) deleteFile(id2);
+  allocateFile('HIMEM.SYS', 9, {silent:true});
+  allocateFile('SMARTDRV.EXE', 14, {silent:true});
+  const id3 = allocateFile('TEMP002.DAT', 7, {silent:true});
+  if (id3) deleteFile(id3);
+
+  log(`Initial fragmentation: ${getFragmentation()}%`, 'warn');
+  log('Run LEDGER.EXE to start earning money!', 'money');
+
+  renderMoney();
   render();
 }
 
