@@ -1334,8 +1334,7 @@ function renderSoftwareList() {
     el.innerHTML = '<div style="color:var(--green-dim);font-size:11px">No software installed</div>';
     return;
   }
-  // Remove placeholder text if present
-  if (el.querySelector('div:not([id])')) el.innerHTML = '';
+
   for (const id of ids) {
     renderSoftwareCard(id, el);
   }
