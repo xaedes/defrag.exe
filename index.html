@@ -186,6 +186,20 @@
   .block.defrag-read { animation: blink-read 0.2s; }
   .block.defrag-write { animation: blink-write 0.2s; }
 
+  /* Read/write head block highlights */
+  .block.head-read {
+    outline: 2px solid var(--cyan) !important;
+    box-shadow: 0 0 6px var(--cyan), inset 0 0 4px rgba(0,255,255,0.3);
+    position: relative;
+    z-index: 2;
+  }
+  .block.head-write {
+    outline: 2px solid var(--amber) !important;
+    box-shadow: 0 0 6px var(--amber), inset 0 0 4px rgba(255,176,0,0.3);
+    position: relative;
+    z-index: 2;
+  }
+
   .btn {
     background: transparent;
     border: 1px solid var(--green-dim);
@@ -402,6 +416,8 @@
       <div class="legend">
         <div class="legend-item"><div class="legend-dot" style="background:#111;border:1px solid #222"></div> Free</div>
         <div class="legend-item"><div class="legend-dot" style="background:#0066ff"></div> System</div>
+        <div class="legend-item"><div class="legend-dot" style="border:2px solid var(--cyan);background:transparent"></div> R-Head</div>
+        <div class="legend-item"><div class="legend-dot" style="border:2px solid var(--amber);background:transparent"></div> W-Head</div>
         <div id="legend-files" class="legend" style="flex:1"></div>
       </div>
       <div id="disk-map" style="margin-top:6px;flex:1;overflow-y:auto;"></div>
@@ -482,6 +498,91 @@ let playerMoney = 0;
 let swRuntime = {};
 
 const SYSTEM_BLOCKS = 4;
+
+// ==========================================
+// DISK HEAD SYSTEM
+// ==========================================
+// Heads have float (x,y) in block-grid coordinates (col, row), COLS columns wide.
+// blockToXY: block index -> {x, y}
+// xyToBlock: nearest integer {x,y} -> block index
+const HEAD_SPEED = 14; // default blocks per second (overridden by getHeadSpeed())
+const HEAD_SNAP = 0.08; // snap when within this distance
+
+function getHeadSpeed() {
+  // defrag-speed values: 30=turbo, 60=fast, 120=normal, 250=slow
+  // Map to blocks/sec: faster defrag = faster head
+  const sel = document.getElementById('defrag-speed');
+  const ms = sel ? parseInt(sel.value) : 60;
+  // At 60ms → 14 blk/s, at 250ms → 4 blk/s, at 30ms → 22 blk/s
+  return Math.round(1200 / ms);
+}
+
+function blockToXY(blockIdx) {
+  return { x: blockIdx % COLS, y: Math.floor(blockIdx / COLS) };
+}
+
+function xyToNearestBlock(x, y) {
+  const col = Math.max(0, Math.min(COLS - 1, Math.round(x)));
+  const row = Math.max(0, Math.min(Math.floor(DISK_SIZE / COLS) - 1, Math.round(y)));
+  return row * COLS + col;
+}
+
+const readHead  = { x: 0, y: 0, targetBlock: 0, cssClass: 'head-read',  visBlock: 0 };
+const writeHead = { x: 1, y: 0, targetBlock: 1, cssClass: 'head-write', visBlock: 1 };
+
+// Move a head to a block index; animates at HEAD_SPEED, resolves when arrived.
+// Returns a promise that resolves when the head reaches the target.
+function moveHead(head, blockIdx) {
+  head.targetBlock = blockIdx;
+  const target = blockToXY(blockIdx);
+
+  return new Promise(resolve => {
+    let lastTime = null;
+
+    function step(ts) {
+      if (lastTime === null) lastTime = ts;
+      const dt = Math.min((ts - lastTime) / 1000, 0.05); // seconds, capped
+      lastTime = ts;
+
+      const dx = target.x - head.x;
+      const dy = target.y - head.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist <= HEAD_SNAP) {
+        head.x = target.x;
+        head.y = target.y;
+        const newVis = xyToNearestBlock(head.x, head.y);
+        updateHeadVisual(head, newVis);
+        resolve();
+        return;
+      }
+
+      const move = getHeadSpeed() * dt;
+      const ratio = Math.min(1, move / dist);
+      head.x += dx * ratio;
+      head.y += dy * ratio;
+
+      const newVis = xyToNearestBlock(head.x, head.y);
+      updateHeadVisual(head, newVis);
+
+      requestAnimationFrame(step);
+    }
+
+    requestAnimationFrame(step);
+  });
+}
+
+function updateHeadVisual(head, newVisBlock) {
+  if (newVisBlock !== head.visBlock) {
+    // Remove class from old block
+    const oldEl = document.querySelector(`[data-block="${head.visBlock}"]`);
+    if (oldEl) oldEl.classList.remove(head.cssClass);
+    head.visBlock = newVisBlock;
+  }
+  // Apply class to current block
+  const el = document.querySelector(`[data-block="${head.visBlock}"]`);
+  if (el) el.classList.add(head.cssClass);
+}
 
 // ==========================================
 // SHOP CATALOG
@@ -867,12 +968,11 @@ async function executeSoftwareOp(sw, rt, op) {
     case 'read': {
       const fid = sw.persistentFileIds[op.file];
       if (!files[fid]) throw new Error(`file ${op.file} missing`);
-      // Flash some blocks
       const f = files[fid];
       if (f && f.blocks.length > 0) {
+        await moveReadHead(f.blocks[0]);
         flashBlock(f.blocks[0], 'defrag-read');
       }
-      await sleep(30);
       break;
     }
     case 'create': {
@@ -880,9 +980,14 @@ async function executeSoftwareOp(sw, rt, op) {
       const size = op.size || 4;
       const fid = allocateFile(name, size, { silent: true, swId: sw.id });
       if (fid === null) throw new Error('disk full');
-      // Track by name for delete-by-name
       const key = op.which || name;
       rt.tmpFiles[key] = fid;
+      // Move write head to first allocated block
+      const f = files[fid];
+      if (f && f.blocks.length > 0) {
+        await moveWriteHead(f.blocks[0]);
+        flashBlock(f.blocks[0], 'defrag-write');
+      }
       break;
     }
     case 'append': {
@@ -890,14 +995,21 @@ async function executeSoftwareOp(sw, rt, op) {
       if (op.file) {
         fid = sw.persistentFileIds[op.file];
       } else {
-        // append to most recent tmp
         const keys = Object.keys(rt.tmpFiles);
         if (keys.length === 0) throw new Error('no tmp file to append');
         fid = rt.tmpFiles[keys[keys.length - 1]];
       }
       if (!files[fid]) throw new Error('target file missing');
+      const prevLen = files[fid].blocks.length;
       const ok = appendFile(fid, op.size || 2);
       if (!ok) throw new Error('disk full during append');
+      // Move write head to first new block
+      const f = files[fid];
+      if (f && f.blocks.length > prevLen) {
+        const newBlock = f.blocks[prevLen];
+        await moveWriteHead(newBlock);
+        flashBlock(newBlock, 'defrag-write');
+      }
       break;
     }
     case 'delete': {
@@ -907,7 +1019,6 @@ async function executeSoftwareOp(sw, rt, op) {
       } else if (op.file) {
         fid = sw.persistentFileIds[op.file];
       } else {
-        // delete last tmp
         const keys = Object.keys(rt.tmpFiles);
         if (keys.length === 0) return;
         const k = keys[keys.length - 1];
@@ -1098,8 +1209,9 @@ async function runDefrag(mode, speed) {
       if (sourcePos === -1) for (let i = 0; i < DISK_SIZE; i++) { if (disk[i] === wantedId) { sourcePos = i; break; } }
       if (sourcePos === -1) continue;
 
+      // Move read head to source, wait for arrival
+      await moveReadHead(sourcePos);
       flashBlock(sourcePos, 'defrag-read');
-      await sleep(speed * 0.4);
 
       if (disk[targetPos] !== null) {
         let park = -1;
@@ -1118,6 +1230,8 @@ async function runDefrag(mode, speed) {
       const f = files[wantedId];
       if (f) { const bi = f.blocks.indexOf(sourcePos); if (bi !== -1) f.blocks[bi] = targetPos; }
 
+      // Move write head to target, wait for arrival
+      await moveWriteHead(targetPos);
       flashBlock(targetPos, 'defrag-write');
       moves++;
       const pct = Math.min(99, Math.round((targetPos / DISK_SIZE) * 100));
@@ -1129,9 +1243,18 @@ async function runDefrag(mode, speed) {
   render();
 }
 
+// moveReadHead / moveWriteHead: move head to block and wait for arrival
+async function moveReadHead(blockIdx) {
+  return moveHead(readHead, blockIdx);
+}
+async function moveWriteHead(blockIdx) {
+  return moveHead(writeHead, blockIdx);
+}
+
+// Legacy flash (kept for brief visual pop after head arrives)
 function flashBlock(pos, cls) {
   const el = document.querySelector(`[data-block="${pos}"]`);
-  if (el) { el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 200); }
+  if (el) { el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 150); }
 }
 
 // ==========================================
@@ -1267,6 +1390,10 @@ function renderDiskMap() {
   }
   map.innerHTML = '';
   map.appendChild(frag);
+
+  // Reapply head highlights (lost when DOM is rebuilt)
+  updateHeadVisual(readHead, readHead.visBlock);
+  updateHeadVisual(writeHead, writeHead.visBlock);
 }
 
 function renderFileList() {
