@@ -364,6 +364,8 @@
     <div class="stat"><span class="stat-label">FILES:</span><span id="stat-files" class="stat-value">0</span></div>
     <div class="stat"><span class="stat-label">FRAG:</span><span id="stat-frag" class="stat-value good">0%</span></div>
     <div class="stat"><span class="stat-label">RAM:</span><span id="stat-ram" class="stat-value">256 KB</span></div>
+    <div class="stat"><span class="stat-label">R-HEADS:</span><span id="stat-rheads" class="stat-value good">1</span></div>
+    <div class="stat"><span class="stat-label">W-HEADS:</span><span id="stat-wheads" class="stat-value good">1</span></div>
     <div class="stat" style="flex:1"><div class="fragmentation-meter"><div class="frag-fill" id="frag-meter" style="width:0%"></div></div></div>
   </div>
 
@@ -434,6 +436,8 @@
       <div class="ram-bar"><div class="ram-fill" id="ram-fill" style="width:0%"></div></div>
       <div style="font-size:10px;color:var(--green-dim);margin-top:2px">
         HDD: <span id="hw-hdd" style="color:var(--amber)">512 BLK</span>
+        &nbsp;|&nbsp; R-Heads: <span id="hw-rheads" style="color:var(--cyan)">1</span>
+        &nbsp;|&nbsp; W-Heads: <span id="hw-wheads" style="color:var(--amber)">1</span>
       </div>
 
       <hr class="separator">
@@ -500,20 +504,13 @@ let swRuntime = {};
 const SYSTEM_BLOCKS = 4;
 
 // ==========================================
-// DISK HEAD SYSTEM
+// DISK HEAD SYSTEM — Multi-head with locking
 // ==========================================
-// Heads have float (x,y) in block-grid coordinates (col, row), COLS columns wide.
-// blockToXY: block index -> {x, y}
-// xyToBlock: nearest integer {x,y} -> block index
-const HEAD_SPEED = 14; // default blocks per second (overridden by getHeadSpeed())
-const HEAD_SNAP = 0.08; // snap when within this distance
+const HEAD_SNAP = 0.08;
 
 function getHeadSpeed() {
-  // defrag-speed values: 30=turbo, 60=fast, 120=normal, 250=slow
-  // Map to blocks/sec: faster defrag = faster head
   const sel = document.getElementById('defrag-speed');
   const ms = sel ? parseInt(sel.value) : 60;
-  // At 60ms → 14 blk/s, at 250ms → 4 blk/s, at 30ms → 22 blk/s
   return Math.round(1200 / ms);
 }
 
@@ -527,12 +524,73 @@ function xyToNearestBlock(x, y) {
   return row * COLS + col;
 }
 
-const readHead  = { x: 0, y: 0, targetBlock: 0, cssClass: 'head-read',  visBlock: 0 };
-const writeHead = { x: 1, y: 0, targetBlock: 1, cssClass: 'head-write', visBlock: 1 };
+// Head pools — start with one of each, expandable via shop
+// Each head: { id, type:'read'|'write', x, y, targetBlock, cssClass, visBlock, inUse: bool }
+let readHeads  = [];
+let writeHeads = [];
 
-// Move a head to a block index; animates at HEAD_SPEED, resolves when arrived.
-// Returns a promise that resolves when the head reaches the target.
-function moveHead(head, blockIdx) {
+function makeHead(type, idx) {
+  return {
+    id: `${type}-${idx}`,
+    type,
+    x: idx * 2,
+    y: 0,
+    targetBlock: idx * 2,
+    cssClass: type === 'read' ? 'head-read' : 'head-write',
+    visBlock: idx * 2,
+    inUse: false,
+  };
+}
+
+function initHeads() {
+  readHeads  = [makeHead('read', 0)];
+  writeHeads = [makeHead('write', 0)];
+}
+
+function addReadHead() {
+  readHeads.push(makeHead('read', readHeads.length));
+  log(`Read head #${readHeads.length} installed`, 'action');
+}
+
+function addWriteHead() {
+  writeHeads.push(makeHead('write', writeHeads.length));
+  log(`Write head #${writeHeads.length} installed`, 'action');
+}
+
+// Distance from head's current position to a block index
+function headDistTo(head, blockIdx) {
+  const t = blockToXY(blockIdx);
+  const dx = head.x - t.x;
+  const dy = head.y - t.y;
+  return Math.sqrt(dx*dx + dy*dy);
+}
+
+// Acquire the closest free head from a pool (blocks until one is available)
+async function acquireHead(pool) {
+  while (true) {
+    // Find closest free head
+    let best = null, bestDist = Infinity;
+    for (const h of pool) {
+      if (!h.inUse) {
+        const d = headDistTo(h, h.targetBlock);
+        if (d < bestDist) { bestDist = d; best = h; }
+      }
+    }
+    if (best) {
+      best.inUse = true;
+      return best;
+    }
+    // None free — wait a tick and retry
+    await sleep(20);
+  }
+}
+
+function releaseHead(head) {
+  head.inUse = false;
+}
+
+// Move a specific head to a block; resolves when arrived
+function moveHeadTo(head, blockIdx) {
   head.targetBlock = blockIdx;
   const target = blockToXY(blockIdx);
 
@@ -541,7 +599,7 @@ function moveHead(head, blockIdx) {
 
     function step(ts) {
       if (lastTime === null) lastTime = ts;
-      const dt = Math.min((ts - lastTime) / 1000, 0.05); // seconds, capped
+      const dt = Math.min((ts - lastTime) / 1000, 0.05);
       lastTime = ts;
 
       const dx = target.x - head.x;
@@ -574,20 +632,81 @@ function moveHead(head, blockIdx) {
 
 function updateHeadVisual(head, newVisBlock) {
   if (newVisBlock !== head.visBlock) {
-    // Remove class from old block
     const oldEl = document.querySelector(`[data-block="${head.visBlock}"]`);
     if (oldEl) oldEl.classList.remove(head.cssClass);
     head.visBlock = newVisBlock;
   }
-  // Apply class to current block
   const el = document.querySelector(`[data-block="${head.visBlock}"]`);
   if (el) el.classList.add(head.cssClass);
+}
+
+// High-level helpers: acquire closest free head, move it, return it locked.
+// Caller must releaseHead() when done with the operation.
+async function acquireAndMoveReadHead(blockIdx) {
+  const head = await acquireHead(readHeads);
+  await moveHeadTo(head, blockIdx);
+  return head;
+}
+
+async function acquireAndMoveWriteHead(blockIdx) {
+  const head = await acquireHead(writeHeads);
+  await moveHeadTo(head, blockIdx);
+  return head;
+}
+
+// Compatibility wrappers used by defrag (acquire + move + release)
+async function moveReadHead(blockIdx) {
+  const head = await acquireAndMoveReadHead(blockIdx);
+  releaseHead(head);
+}
+
+async function moveWriteHead(blockIdx) {
+  const head = await acquireAndMoveWriteHead(blockIdx);
+  releaseHead(head);
 }
 
 // ==========================================
 // SHOP CATALOG
 // ==========================================
 const SHOP_UPGRADES = [
+  {
+    id: 'rhead2',
+    name: 'Read Head #2',
+    desc: 'Second read head — parallel software reads.',
+    price: 80,
+    ramReq: 0,
+    type: 'rhead',
+    bought: false,
+  },
+  {
+    id: 'rhead3',
+    name: 'Read Head #3',
+    desc: 'Third read head — maximum read parallelism.',
+    price: 250,
+    ramReq: 0,
+    type: 'rhead',
+    requires: 'rhead2',
+    bought: false,
+  },
+  {
+    id: 'whead2',
+    name: 'Write Head #2',
+    desc: 'Second write head — parallel software writes.',
+    price: 100,
+    ramReq: 0,
+    type: 'whead',
+    bought: false,
+  },
+  {
+    id: 'whead3',
+    name: 'Write Head #3',
+    desc: 'Third write head — maximum write throughput.',
+    price: 320,
+    ramReq: 0,
+    type: 'whead',
+    requires: 'whead2',
+    bought: false,
+  },
   {
     id: 'hdd512',
     name: 'HDD Upgrade: 1024 BLK',
@@ -909,9 +1028,9 @@ async function runSoftware(swId) {
   if (!sw || !rt) return;
   if (rt.running) return;
 
-  // Check RAM
+  // Check RAM — soft abort (no crash, no reinstall needed)
   if (getRamFree() < sw.ramReq) {
-    log(`${sw.name}: NOT ENOUGH RAM (need ${sw.ramReq} KB, free: ${getRamFree()} KB)`, 'err');
+    log(`${sw.name}: NOT ENOUGH RAM (need ${sw.ramReq} KB, free: ${getRamFree()} KB)`, 'warn');
     return;
   }
 
@@ -972,7 +1091,6 @@ async function runSoftware(swId) {
 async function executeSoftwareOp(sw, rt, op) {
   switch(op.op) {
     case 'read': {
-      // Resolve file — persistent or tmp
       let fid;
       if (op.file) {
         fid = sw.persistentFileIds[op.file];
@@ -986,26 +1104,23 @@ async function executeSoftwareOp(sw, rt, op) {
       const len = f.blocks.length;
       if (len === 0) break;
 
-      // Resolve offset (negative = from end)
       const rawOffset = op.offset != null ? op.offset : 0;
       const offset = rawOffset < 0 ? Math.max(0, len + rawOffset) : Math.min(rawOffset, len - 1);
 
-      // Resolve size (undefined/null = all remaining; negative = relative to end)
       let count;
       if (op.size == null) {
         count = len - offset;
       } else if (op.size < 0) {
-        // -1 means include last block → remaining + 1 + size
         count = Math.max(0, (len - offset) + op.size + 1);
       } else {
         count = Math.min(op.size, len - offset);
       }
 
-      // Move read head block-by-block
       for (let i = 0; i < count; i++) {
         const blockIdx = f.blocks[offset + i];
-        await moveReadHead(blockIdx);
+        const head = await acquireAndMoveReadHead(blockIdx);
         flashBlock(blockIdx, 'defrag-read');
+        releaseHead(head);
       }
       break;
     }
@@ -1016,11 +1131,11 @@ async function executeSoftwareOp(sw, rt, op) {
       if (fid === null) throw new Error('disk full');
       const key = op.which || name;
       rt.tmpFiles[key] = fid;
-      // Move write head block-by-block over every allocated block
       const f = files[fid];
       for (const blockIdx of f.blocks) {
-        await moveWriteHead(blockIdx);
+        const head = await acquireAndMoveWriteHead(blockIdx);
         flashBlock(blockIdx, 'defrag-write');
+        releaseHead(head);
       }
       break;
     }
@@ -1037,11 +1152,11 @@ async function executeSoftwareOp(sw, rt, op) {
       const prevLen = files[fid].blocks.length;
       const ok = appendFile(fid, op.size || 2);
       if (!ok) throw new Error('disk full during append');
-      // Move write head block-by-block over each newly appended block
       const f = files[fid];
       for (let i = prevLen; i < f.blocks.length; i++) {
-        await moveWriteHead(f.blocks[i]);
+        const head = await acquireAndMoveWriteHead(f.blocks[i]);
         flashBlock(f.blocks[i], 'defrag-write');
+        releaseHead(head);
       }
       break;
     }
@@ -1061,11 +1176,11 @@ async function executeSoftwareOp(sw, rt, op) {
       if (fid && files[fid]) {
         const keyEntry = Object.entries(rt.tmpFiles).find(([k, v]) => v === fid);
         if (keyEntry) delete rt.tmpFiles[keyEntry[0]];
-        // Move write head to first block of file before deleting
         const f = files[fid];
         if (f && f.blocks.length > 0) {
-          await moveWriteHead(f.blocks[0]);
+          const head = await acquireAndMoveWriteHead(f.blocks[0]);
           flashBlock(f.blocks[0], 'defrag-write');
+          releaseHead(head);
         }
         deleteFile(fid);
       }
@@ -1144,6 +1259,10 @@ function buyShopItem(itemId) {
   const item = SHOP_UPGRADES.find(i => i.id === itemId);
   if (!item || item.bought) return;
   if (RAM_SIZE < item.ramReq) { log(`Need ${item.ramReq} KB RAM to buy ${item.name}`, 'err'); return; }
+  if (item.requires) {
+    const req = SHOP_UPGRADES.find(i => i.id === item.requires);
+    if (!req || !req.bought) { log(`Requires ${req ? req.name : item.requires} first`, 'err'); return; }
+  }
   if (!spendMoney(item.price)) { log(`Not enough money for ${item.name}`, 'err'); return; }
   item.bought = true;
   if (item.type === 'hdd') {
@@ -1151,6 +1270,10 @@ function buyShopItem(itemId) {
   } else if (item.type === 'ram') {
     RAM_SIZE = item.value;
     log(`RAM upgraded to ${RAM_SIZE} KB`, 'action');
+  } else if (item.type === 'rhead') {
+    addReadHead();
+  } else if (item.type === 'whead') {
+    addWriteHead();
   }
   renderShop();
   renderStats();
@@ -1280,14 +1403,6 @@ async function runDefrag(mode, speed) {
     }
   }
   render();
-}
-
-// moveReadHead / moveWriteHead: move head to block and wait for arrival
-async function moveReadHead(blockIdx) {
-  return moveHead(readHead, blockIdx);
-}
-async function moveWriteHead(blockIdx) {
-  return moveHead(writeHead, blockIdx);
 }
 
 // Legacy flash (kept for brief visual pop after head arrives)
@@ -1431,8 +1546,8 @@ function renderDiskMap() {
   map.appendChild(frag);
 
   // Reapply head highlights (lost when DOM is rebuilt)
-  updateHeadVisual(readHead, readHead.visBlock);
-  updateHeadVisual(writeHead, writeHead.visBlock);
+  for (const h of readHeads)  updateHeadVisual(h, h.visBlock);
+  for (const h of writeHeads) updateHeadVisual(h, h.visBlock);
 }
 
 function renderFileList() {
@@ -1476,6 +1591,13 @@ function renderStats() {
   document.getElementById('stat-capacity').textContent = `${DISK_SIZE} BLK`;
   document.getElementById('stat-ram').textContent = `${RAM_SIZE} KB`;
 
+  const rBusy = readHeads.filter(h => h.inUse).length;
+  const wBusy = writeHeads.filter(h => h.inUse).length;
+  const rEl = document.getElementById('stat-rheads');
+  const wEl = document.getElementById('stat-wheads');
+  if (rEl) rEl.textContent = `${readHeads.length - rBusy}/${readHeads.length}`;
+  if (wEl) wEl.textContent = `${writeHeads.length - wBusy}/${writeHeads.length}`;
+
   const fragEl = document.getElementById('stat-frag');
   fragEl.textContent = `${frag}%`;
   fragEl.className = 'stat-value ' + (frag < 20 ? 'good' : frag < 50 ? '' : 'bad');
@@ -1491,6 +1613,10 @@ function renderStats() {
   document.getElementById('hw-hdd').textContent = `${DISK_SIZE} BLK`;
   const ramPct = RAM_SIZE > 0 ? (ramUsed / RAM_SIZE * 100) : 0;
   document.getElementById('ram-fill').style.width = `${ramPct}%`;
+  const hwRh = document.getElementById('hw-rheads');
+  const hwWh = document.getElementById('hw-wheads');
+  if (hwRh) hwRh.textContent = readHeads.length;
+  if (hwWh) hwWh.textContent = writeHeads.length;
 }
 
 function renderSoftwareList() {
@@ -1593,15 +1719,28 @@ function renderShop() {
     if (item.bought) continue;
     const canAfford = playerMoney >= item.price;
     const hasRam = RAM_SIZE >= item.ramReq;
+    const reqMet = !item.requires || SHOP_UPGRADES.find(i => i.id === item.requires)?.bought;
+    const canBuy = canAfford && hasRam && reqMet;
     const div = document.createElement('div');
     div.className = 'shop-item';
+    let reqLabel = '';
+    if (!reqMet) {
+      const req = SHOP_UPGRADES.find(i => i.id === item.requires);
+      reqLabel = `<div class="shop-req">Requires: ${req ? req.name : item.requires}</div>`;
+    } else if (item.ramReq > 0 && !hasRam) {
+      reqLabel = `<div class="shop-req">Requires: ${item.ramReq} KB RAM</div>`;
+    }
+    let btnLabel = '▶ BUY';
+    if (!canAfford) btnLabel = `⚠ NEED $${(item.price - playerMoney).toFixed(2)}`;
+    else if (!hasRam) btnLabel = `⚠ NEED RAM`;
+    else if (!reqMet) btnLabel = `⚠ PREREQ`;
     div.innerHTML = `
       <div class="shop-name">${item.name}</div>
       <div class="shop-desc">${item.desc}</div>
-      ${item.ramReq > 0 ? `<div class="shop-req">Requires: ${item.ramReq} KB RAM</div>` : ''}
+      ${reqLabel}
       <div class="shop-price">$${item.price.toFixed(2)}</div>
-      <button class="btn gold-btn" style="margin-top:3px;font-size:11px;" onclick="buyShopItem('${item.id}')" ${canAfford && hasRam ? '' : 'disabled'}>
-        ${canAfford && hasRam ? '▶ BUY' : canAfford ? '⚠ NEED RAM' : '⚠ NEED $' + (item.price - playerMoney).toFixed(2)}
+      <button class="btn gold-btn" style="margin-top:3px;font-size:11px;" onclick="buyShopItem('${item.id}')" ${canBuy ? '' : 'disabled'}>
+        ${btnLabel}
       </button>
     `;
     swEl.appendChild(div);
@@ -1652,6 +1791,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // ==========================================
 function init() {
   initDisk();
+  initHeads();
   log('DEFRAG.EXE v4.2 — System initialized', 'action');
   log('C:\\ drive online — 512 blocks', '');
 
