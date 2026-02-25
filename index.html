@@ -498,8 +498,7 @@ let selectedFileId = null;
 let defragRunning = false;
 let playerMoney = 0;
 
-// Software runtime state: swId -> { running, looping, stepIndex, intervalHandle, crashMsg }
-let swRuntime = {};
+// swInstances is declared near RAM TRACKING section
 
 const SYSTEM_BLOCKS = 4;
 
@@ -991,10 +990,19 @@ function getFragmentation() {
 // ==========================================
 // RAM TRACKING
 // ==========================================
+// swInstances: swId -> array of running instance objects
+// Each instance: { id, running, crashed, stepIndex, progress, tmpFiles, stopRequested }
+let swInstances = {};
+let nextInstanceId = 1;
+
 function getRamUsed() {
   let used = 0;
-  for (const [id, sw] of Object.entries(installedSoftware)) {
-    if (swRuntime[id] && swRuntime[id].running) used += sw.ramReq;
+  for (const [swId, instances] of Object.entries(swInstances)) {
+    const sw = installedSoftware[swId];
+    if (!sw) continue;
+    for (const inst of instances) {
+      if (inst.running) used += sw.ramReq;
+    }
   }
   return used;
 }
@@ -1016,7 +1024,7 @@ function installSoftware(swDef) {
     sw.persistentFileIds[pf.key] = id;
   }
   installedSoftware[sw.id] = sw;
-  swRuntime[sw.id] = { running: false, looping: false, stepIndex: 0, progress: 0, tmpFiles: {}, stopRequested: false };
+  swInstances[sw.id] = [];
   log(`Installed ${sw.name}`, 'action');
   render();
   return true;
@@ -1024,9 +1032,7 @@ function installSoftware(swDef) {
 
 async function runSoftware(swId) {
   const sw = installedSoftware[swId];
-  const rt = swRuntime[swId];
-  if (!sw || !rt) return;
-  if (rt.running) return;
+  if (!sw) return;
 
   // Check RAM — soft abort (no crash, no reinstall needed)
   if (getRamFree() < sw.ramReq) {
@@ -1034,32 +1040,43 @@ async function runSoftware(swId) {
     return;
   }
 
-  rt.running = true;
-  rt.crashed = false;
-  rt.stopRequested = false;
-  rt.tmpFiles = {};
-  log(`${sw.name}: starting...`, 'action');
+  // Create a new instance
+  const inst = {
+    id: nextInstanceId++,
+    running: true,
+    crashed: false,
+    stopRequested: false,
+    stepIndex: 0,
+    progress: 0,
+    tmpFiles: {},
+  };
+  swInstances[swId].push(inst);
+  log(`${sw.name} #${inst.id}: starting...`, 'action');
   render();
 
   do {
-    // Execute ops
     for (let i = 0; i < sw.ops.length; i++) {
-      if (!rt.running || rt.stopRequested) break;
+      if (!inst.running || inst.stopRequested) break;
       const op = sw.ops[i];
-      rt.stepIndex = i;
-      rt.progress = i / sw.ops.length;
+      inst.stepIndex = i;
+      inst.progress = i / sw.ops.length;
       renderSoftwareCard(swId);
       await sleep(80);
 
       try {
-        await executeSoftwareOp(sw, rt, op);
+        await executeSoftwareOp(sw, inst, op);
       } catch(e) {
-        log(`${sw.name}: CRASH — ${e.message}`, 'crash');
-        rt.running = false;
-        rt.crashed = true;
-        // Clean up tmp files
-        for (const k of Object.keys(rt.tmpFiles)) { if (rt.tmpFiles[k]) deleteFile(rt.tmpFiles[k]); }
-        rt.tmpFiles = {};
+        log(`${sw.name} #${inst.id}: CRASH — ${e.message}`, 'crash');
+        inst.running = false;
+        inst.crashed = true;
+        for (const k of Object.keys(inst.tmpFiles)) { if (inst.tmpFiles[k]) deleteFile(inst.tmpFiles[k]); }
+        inst.tmpFiles = {};
+        // Remove crashed instance after a short display pause
+        setTimeout(() => {
+          const arr = swInstances[swId];
+          if (arr) { const idx = arr.indexOf(inst); if (idx !== -1) arr.splice(idx, 1); }
+          render();
+        }, 3000);
         render();
         return;
       }
@@ -1068,23 +1085,25 @@ async function runSoftware(swId) {
       await sleep(50);
     }
 
-    if (rt.stopRequested) break;
+    if (inst.stopRequested) break;
 
-    if (sw.isServer && rt.running) {
-      rt.progress = 1;
+    if (sw.isServer && inst.running) {
+      inst.progress = 1;
       renderSoftwareCard(swId);
       await sleep(200);
     }
 
-  } while (sw.isServer && rt.running && !rt.stopRequested);
+  } while (sw.isServer && inst.running && !inst.stopRequested);
 
-  // Clean up remaining tmp files
-  for (const k of Object.keys(rt.tmpFiles)) { if (rt.tmpFiles[k]) deleteFile(rt.tmpFiles[k]); }
-  rt.tmpFiles = {};
-  rt.running = false;
-  rt.looping = false;
-  rt.progress = 0;
-  log(`${sw.name}: completed`, 'action');
+  // Clean up
+  for (const k of Object.keys(inst.tmpFiles)) { if (inst.tmpFiles[k]) deleteFile(inst.tmpFiles[k]); }
+  inst.tmpFiles = {};
+  inst.running = false;
+  inst.progress = 0;
+  // Remove from instances array
+  const arr = swInstances[swId];
+  if (arr) { const idx = arr.indexOf(inst); if (idx !== -1) arr.splice(idx, 1); }
+  log(`${sw.name} #${inst.id}: completed`, 'action');
   render();
 }
 
@@ -1193,14 +1212,23 @@ async function executeSoftwareOp(sw, rt, op) {
   }
 }
 
-function stopSoftware(swId) {
-  const rt = swRuntime[swId];
-  if (rt) { rt.stopRequested = true; }
+function stopSoftware(swId, instId) {
+  const instances = swInstances[swId];
+  if (!instances) return;
+  if (instId != null) {
+    const inst = instances.find(i => i.id === instId);
+    if (inst) inst.stopRequested = true;
+  } else {
+    // Stop all instances
+    for (const inst of instances) inst.stopRequested = true;
+  }
 }
 
 function reinstallSoftware(swId) {
   const sw = installedSoftware[swId];
   if (!sw) return;
+  // Stop any running instances first
+  stopSoftware(swId);
   log(`Reinstalling ${sw.name}...`, 'warn');
   // Delete old persistent files
   for (const [key, fid] of Object.entries(sw.persistentFileIds)) {
@@ -1213,8 +1241,7 @@ function reinstallSoftware(swId) {
     if (id === null) { log(`REINSTALL FAILED: disk full`, 'err'); return; }
     sw.persistentFileIds[pf.key] = id;
   }
-  swRuntime[swId].crashed = false;
-  swRuntime[swId].running = false;
+  swInstances[swId] = [];
   log(`${sw.name}: reinstalled`, 'action');
   render();
 }
@@ -1634,16 +1661,14 @@ function renderSoftwareList() {
 
 function renderSoftwareCard(swId, container) {
   const sw = installedSoftware[swId];
-  const rt = swRuntime[swId];
-  if (!sw || !rt) return;
+  if (!sw) return;
 
-  const running = rt.running;
-  const crashed = rt.crashed;
-  const pct = Math.round((rt.progress || 0) * 100);
+  const instances = swInstances[swId] || [];
+  const anyRunning = instances.some(i => i.running);
+  const anyCrashed = instances.some(i => i.crashed);
 
   let card = document.getElementById(`sw-card-${swId}`);
   if (!card) {
-    // Build card skeleton once
     card = document.createElement('div');
     card.id = `sw-card-${swId}`;
     card.className = 'software-card';
@@ -1653,58 +1678,80 @@ function renderSoftwareCard(swId, container) {
         <span class="sw-badge ${sw.badgeType}" data-role="badge">${sw.badgeType === 'server' ? '⟳ SERVER' : '▶ PROG'}</span>
       </div>
       <div class="sw-info" data-role="info"></div>
-      <div class="sw-progress" data-role="progress-wrap" style="display:none"><div class="sw-progress-fill" data-role="progress-fill" style="width:0%"></div></div>
+      <div data-role="instances"></div>
       <div class="sw-btn-row" data-role="btn-row"></div>
     `;
     if (container) container.appendChild(card);
   }
 
-  // Update card class
-  card.className = `software-card${running ? ' running' : ''}${crashed ? ' crashed' : ''}`;
+  // Card border state: running if any instance running, else normal
+  card.className = `software-card${anyRunning ? ' running' : ''}`;
 
-  // Update name style
+  // Name style
   const nameEl = card.querySelector('[data-role="name"]');
-  nameEl.className = `sw-name ${running ? 'running-name' : crashed ? 'crashed-name' : ''}`;
+  nameEl.className = `sw-name ${anyRunning ? 'running-name' : ''}`;
 
-  // Update info
+  // Info line
   const infoEl = card.querySelector('[data-role="info"]');
+  const runCount = instances.filter(i => i.running).length;
   const infoHtml = `RAM: <span>${sw.ramReq} KB</span> &nbsp; Files: <span>${sw.persistentFiles.length}</span>`
-    + (crashed ? `<br><span style="color:var(--red)">⚠ CRASHED</span>` : '');
+    + (runCount > 0 ? ` &nbsp; <span style="color:var(--cyan)">×${runCount} running</span>` : '');
   if (infoEl.innerHTML !== infoHtml) infoEl.innerHTML = infoHtml;
 
-  // Update progress bar
-  const progWrap = card.querySelector('[data-role="progress-wrap"]');
-  const progFill = card.querySelector('[data-role="progress-fill"]');
-  if (running) {
-    progWrap.style.display = '';
-    progFill.style.width = pct + '%';
-  } else {
-    progWrap.style.display = 'none';
+  // Per-instance progress rows
+  const instContainer = card.querySelector('[data-role="instances"]');
+  // Build a map of existing rows by instance id
+  const existingRows = {};
+  for (const row of instContainer.querySelectorAll('[data-inst-id]')) {
+    existingRows[row.dataset.instId] = row;
+  }
+  // Add/update rows for current instances
+  const activeIds = new Set();
+  for (const inst of instances) {
+    activeIds.add(String(inst.id));
+    let row = existingRows[inst.id];
+    if (!row) {
+      row = document.createElement('div');
+      row.dataset.instId = inst.id;
+      row.style.cssText = 'display:flex;align-items:center;gap:4px;margin:2px 0;';
+      instContainer.appendChild(row);
+    }
+    const pct = Math.round((inst.progress || 0) * 100);
+    const crashedHtml = inst.crashed
+      ? `<span style="color:var(--red);font-size:10px">⚠ CRASH</span>`
+      : `<div style="flex:1;height:4px;background:var(--bg2);border:1px solid var(--border);overflow:hidden">
+           <div style="height:100%;width:${pct}%;background:var(--cyan);transition:width 0.15s"></div>
+         </div>
+         ${inst.running && sw.isServer
+           ? `<button class="btn stop-btn" style="padding:1px 5px;font-size:13px;min-width:0" onclick="stopSoftware('${swId}',${inst.id})">■</button>`
+           : `<span style="color:var(--green-dim);font-size:10px;min-width:28px;text-align:right">#${inst.id}</span>`}`;
+    row.innerHTML = `<span style="color:var(--green-dim);font-size:10px;min-width:22px">#${inst.id}</span>${crashedHtml}`;
+  }
+  // Remove rows for instances no longer present
+  for (const [idStr, row] of Object.entries(existingRows)) {
+    if (!activeIds.has(idStr)) row.remove();
   }
 
-  // Update button — only change innerHTML if the button *type* needs to change
-  // to avoid disrupting active click handlers
+  // RUN / STOP-ALL button
   const btnRow = card.querySelector('[data-role="btn-row"]');
+  const canRun = getRamFree() >= sw.ramReq;
   const existingBtn = btnRow.querySelector('button');
   const existingRole = existingBtn ? existingBtn.dataset.btnRole : '';
 
   let neededRole, neededHtml;
-  if (running && sw.isServer) {
-    neededRole = 'stop';
-    neededHtml = `<button class="btn stop-btn sw-btn" data-btn-role="stop" onclick="stopSoftware('${swId}')">■ STOP</button>`;
-  } else if (running) {
-    neededRole = 'running';
-    neededHtml = `<button class="btn sw-btn" data-btn-role="running" disabled style="color:var(--cyan);border-color:var(--cyan);opacity:0.6;">⟳ RUNNING...</button>`;
-  } else if (crashed) {
-    neededRole = 'reinstall';
-    neededHtml = `<button class="btn danger sw-btn" data-btn-role="reinstall" onclick="reinstallSoftware('${swId}')">↺ REINSTALL</button>`;
+  if (anyRunning && !sw.isServer) {
+    // Non-server running: show disabled indicator + run again if RAM ok
+    neededRole = 'run-multi';
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="run-multi" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN AGAIN</button>`;
+  } else if (anyRunning && sw.isServer) {
+    neededRole = 'run-server';
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="run-server" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ ADD INSTANCE</button>
+                  <button class="btn stop-btn sw-btn" data-btn-role="stop-all" onclick="stopSoftware('${swId}')">■ STOP ALL</button>`;
   } else {
-    const canRun = getRamFree() >= sw.ramReq;
     neededRole = canRun ? 'run' : 'run-disabled';
     neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN</button>`;
   }
 
-  // Only update button DOM if role changed (preserves the button element during server loop)
   if (existingRole !== neededRole) {
     btnRow.innerHTML = neededHtml;
   }
