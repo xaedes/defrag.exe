@@ -645,6 +645,7 @@ const SHOP_UPGRADES = [
 // ==========================================
 // Operations: { op: 'create'|'append'|'delete'|'read'|'earn', file?, size?, amount? }
 // 'file' can be a key string → persistent named file; or null → temp file (tracked per-run)
+// read: offset (default 0, negative = from end), size (default all, negative = relative to end)
 const SOFTWARE_CATALOG = [
   {
     id: 'sw_ledger',
@@ -658,7 +659,7 @@ const SOFTWARE_CATALOG = [
       { key: 'ledger_dat', name: 'LEDGER.DAT', size: 2 }
     ],
     ops: [
-      { op: 'read', file: 'ledger_dat' },
+      { op: 'read', file: 'ledger_dat', offset: 0, size: -1 }, // read whole file
       { op: 'earn', amount: 10.05 },
     ],
   },
@@ -675,7 +676,7 @@ const SOFTWARE_CATALOG = [
     ],
     ops: [
       { op: 'create', file: null, name: 'SORT_TMP.DAT', size: 5 },
-      { op: 'read', file: 'sort_cfg' },
+      { op: 'read', file: 'sort_cfg', offset: 0, size: -1 },  // read whole config
       { op: 'append', file: null, size: 3 },
       { op: 'earn', amount: 0.30 },
       { op: 'delete', file: null },
@@ -694,9 +695,10 @@ const SOFTWARE_CATALOG = [
       { key: 'arch_db', name: 'ARCH.DB', size: 8 },
     ],
     ops: [
-      { op: 'read', file: 'arch_idx' },
+      { op: 'read', file: 'arch_idx', offset: 0, size: -1 },  // scan full index
       { op: 'create', file: null, name: 'PACK.TMP', size: 12 },
       { op: 'append', file: 'arch_db', size: 4 },
+      { op: 'read', file: 'arch_db', offset: -2, size: -1 },  // verify last 2 written blocks
       { op: 'earn', amount: 1.20 },
       { op: 'delete', file: null },
     ],
@@ -714,8 +716,9 @@ const SOFTWARE_CATALOG = [
       { key: 'crunch_log', name: 'CRUNCH.LOG', size: 6 },
     ],
     ops: [
-      { op: 'read', file: 'crunch_cfg' },
+      { op: 'read', file: 'crunch_cfg', offset: 0, size: -1 },   // read full config
       { op: 'create', file: null, name: 'CHUNK.TMP', size: 8 },
+      { op: 'read', file: 'crunch_log', offset: -1, size: -1 },  // check tail of log
       { op: 'append', file: 'crunch_log', size: 2 },
       { op: 'earn', amount: 3.50 },
       { op: 'delete', file: null },
@@ -735,7 +738,8 @@ const SOFTWARE_CATALOG = [
       { key: 'mill_out', name: 'MILL.OUT', size: 20 },
     ],
     ops: [
-      { op: 'read', file: 'mill_cfg' },
+      { op: 'read', file: 'mill_cfg', offset: 0, size: -1 },       // full config
+      { op: 'read', file: 'mill_idx', offset: -3, size: -1 },      // scan last 3 index entries
       { op: 'create', file: null, name: 'PIPE_A.TMP', size: 15 },
       { op: 'create', file: null, name: 'PIPE_B.TMP', size: 10 },
       { op: 'append', file: 'mill_out', size: 5 },
@@ -748,7 +752,7 @@ const SOFTWARE_CATALOG = [
   {
     id: 'sw_gridnode',
     name: 'GRIDNODE.SRV',
-    desc: 'A compute grid node. Massively fragents disk. Enormous revenue.',
+    desc: 'A compute grid node. Massively fragments disk. Enormous revenue.',
     badgeType: 'server',
     price: 3000,
     ramReq: 2048,
@@ -759,12 +763,14 @@ const SOFTWARE_CATALOG = [
       { key: 'gn_db', name: 'GRID.DB', size: 40 },
     ],
     ops: [
-      { op: 'read', file: 'gn_cfg' },
+      { op: 'read', file: 'gn_cfg', offset: 0, size: -1 },        // full config
+      { op: 'read', file: 'gn_state', offset: 0, size: 4 },       // read first 4 state blocks
       { op: 'create', file: null, name: 'NODE_A.TMP', size: 20 },
       { op: 'create', file: null, name: 'NODE_B.TMP', size: 18 },
       { op: 'create', file: null, name: 'NODE_C.TMP', size: 14 },
       { op: 'append', file: 'gn_db', size: 8 },
       { op: 'append', file: 'gn_state', size: 4 },
+      { op: 'read', file: 'gn_db', offset: -4, size: -1 },        // verify last 4 db blocks
       { op: 'earn', amount: 90.00 },
       { op: 'delete', file: null, which: 'NODE_A.TMP' },
       { op: 'delete', file: null, which: 'NODE_B.TMP' },
@@ -966,12 +972,40 @@ async function runSoftware(swId) {
 async function executeSoftwareOp(sw, rt, op) {
   switch(op.op) {
     case 'read': {
-      const fid = sw.persistentFileIds[op.file];
-      if (!files[fid]) throw new Error(`file ${op.file} missing`);
+      // Resolve file — persistent or tmp
+      let fid;
+      if (op.file) {
+        fid = sw.persistentFileIds[op.file];
+      } else {
+        const keys = Object.keys(rt.tmpFiles);
+        if (keys.length === 0) throw new Error('no file to read');
+        fid = rt.tmpFiles[keys[keys.length - 1]];
+      }
+      if (!files[fid]) throw new Error(`file ${op.file || '(tmp)'} missing`);
       const f = files[fid];
-      if (f && f.blocks.length > 0) {
-        await moveReadHead(f.blocks[0]);
-        flashBlock(f.blocks[0], 'defrag-read');
+      const len = f.blocks.length;
+      if (len === 0) break;
+
+      // Resolve offset (negative = from end)
+      const rawOffset = op.offset != null ? op.offset : 0;
+      const offset = rawOffset < 0 ? Math.max(0, len + rawOffset) : Math.min(rawOffset, len - 1);
+
+      // Resolve size (undefined/null = all remaining; negative = relative to end)
+      let count;
+      if (op.size == null) {
+        count = len - offset;
+      } else if (op.size < 0) {
+        // -1 means include last block → remaining + 1 + size
+        count = Math.max(0, (len - offset) + op.size + 1);
+      } else {
+        count = Math.min(op.size, len - offset);
+      }
+
+      // Move read head block-by-block
+      for (let i = 0; i < count; i++) {
+        const blockIdx = f.blocks[offset + i];
+        await moveReadHead(blockIdx);
+        flashBlock(blockIdx, 'defrag-read');
       }
       break;
     }
@@ -982,11 +1016,11 @@ async function executeSoftwareOp(sw, rt, op) {
       if (fid === null) throw new Error('disk full');
       const key = op.which || name;
       rt.tmpFiles[key] = fid;
-      // Move write head to first allocated block
+      // Move write head block-by-block over every allocated block
       const f = files[fid];
-      if (f && f.blocks.length > 0) {
-        await moveWriteHead(f.blocks[0]);
-        flashBlock(f.blocks[0], 'defrag-write');
+      for (const blockIdx of f.blocks) {
+        await moveWriteHead(blockIdx);
+        flashBlock(blockIdx, 'defrag-write');
       }
       break;
     }
@@ -1003,12 +1037,11 @@ async function executeSoftwareOp(sw, rt, op) {
       const prevLen = files[fid].blocks.length;
       const ok = appendFile(fid, op.size || 2);
       if (!ok) throw new Error('disk full during append');
-      // Move write head to first new block
+      // Move write head block-by-block over each newly appended block
       const f = files[fid];
-      if (f && f.blocks.length > prevLen) {
-        const newBlock = f.blocks[prevLen];
-        await moveWriteHead(newBlock);
-        flashBlock(newBlock, 'defrag-write');
+      for (let i = prevLen; i < f.blocks.length; i++) {
+        await moveWriteHead(f.blocks[i]);
+        flashBlock(f.blocks[i], 'defrag-write');
       }
       break;
     }
@@ -1026,8 +1059,14 @@ async function executeSoftwareOp(sw, rt, op) {
         delete rt.tmpFiles[k];
       }
       if (fid && files[fid]) {
-        const key = Object.entries(rt.tmpFiles).find(([k,v]) => v === fid);
-        if (key) delete rt.tmpFiles[key[0]];
+        const keyEntry = Object.entries(rt.tmpFiles).find(([k, v]) => v === fid);
+        if (keyEntry) delete rt.tmpFiles[keyEntry[0]];
+        // Move write head to first block of file before deleting
+        const f = files[fid];
+        if (f && f.blocks.length > 0) {
+          await moveWriteHead(f.blocks[0]);
+          flashBlock(f.blocks[0], 'defrag-write');
+        }
         deleteFile(fid);
       }
       break;
