@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DEFRAG.EXE — Hard Disk Defragmenter</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap');
+
+  :root {
+    --green: #00ff41;
+    --green-dim: #00aa2a;
+    --green-dark: #003310;
+    --amber: #ffb000;
+    --red: #ff3333;
+    --blue: #0088ff;
+    --cyan: #00ffff;
+    --white: #ccffcc;
+    --bg: #050f05;
+    --bg2: #0a180a;
+    --panel: #071007;
+    --border: #005500;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* CRT scanline effect */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.15) 2px,
+      rgba(0,0,0,0.15) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* CRT flicker */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,255,65,0.02);
+    pointer-events: none;
+    z-index: 999;
+    animation: flicker 0.15s infinite;
+  }
+
+  @keyframes flicker {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.97; }
+  }
+
+  .screen {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 10px;
+  }
+
+  .header {
+    text-align: center;
+    padding: 8px 0 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 10px;
+  }
+
+  .header h1 {
+    font-family: 'VT323', monospace;
+    font-size: 32px;
+    color: var(--green);
+    text-shadow: 0 0 10px var(--green), 0 0 20px var(--green-dim);
+    letter-spacing: 4px;
+  }
+
+  .header .subtitle {
+    color: var(--green-dim);
+    font-size: 11px;
+    letter-spacing: 2px;
+  }
+
+  .stats-bar {
+    display: flex;
+    gap: 20px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+
+  .stat {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .stat-label { color: var(--green-dim); }
+  .stat-value { color: var(--amber); font-weight: bold; }
+  .stat-value.good { color: var(--green); }
+  .stat-value.bad { color: var(--red); }
+
+  .main-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr 260px;
+    gap: 8px;
+    height: calc(100vh - 120px);
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 8px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .panel-title {
+    font-family: 'VT323', monospace;
+    font-size: 18px;
+    color: var(--amber);
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
+    margin-bottom: 4px;
+    text-shadow: 0 0 8px var(--amber);
+  }
+
+  /* DISK MAP */
+  .disk-panel {
+    grid-column: 2;
+    display: flex;
+    flex-direction: column;
+  }
+
+  #disk-map {
+    display: grid;
+    gap: 1px;
+    flex: 1;
+    align-content: start;
+  }
+
+  .block {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 1px;
+    cursor: default;
+    transition: opacity 0.1s;
+    position: relative;
+  }
+
+  .block:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: 110%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #000;
+    border: 1px solid var(--green);
+    color: var(--green);
+    padding: 2px 6px;
+    font-size: 10px;
+    white-space: nowrap;
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  .block.free { background: var(--bg2); border: 1px solid #111; }
+  .block.used { border: none; }
+  .block.defrag-read { animation: blink-read 0.2s; }
+  .block.defrag-write { animation: blink-write 0.2s; }
+
+  @keyframes blink-read {
+    0%,100% { filter: none; }
+    50% { filter: brightness(3) saturate(0); }
+  }
+  @keyframes blink-write {
+    0%,100% { filter: none; }
+    50% { filter: brightness(4); }
+  }
+
+  /* FILESYSTEM OPS */
+  .btn {
+    background: transparent;
+    border: 1px solid var(--green-dim);
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px;
+    padding: 4px 8px;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    transition: all 0.1s;
+  }
+  .btn:hover { background: var(--green-dark); border-color: var(--green); color: var(--white); }
+  .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn.primary { border-color: var(--amber); color: var(--amber); }
+  .btn.primary:hover { background: #1a0e00; border-color: var(--amber); }
+  .btn.danger { border-color: var(--red); color: var(--red); }
+  .btn.danger:hover { background: #1a0000; }
+  .btn.run { border-color: var(--cyan); color: var(--cyan); font-family: 'VT323', monospace; font-size: 18px; letter-spacing: 1px; }
+  .btn.run:hover { background: #001a1a; }
+
+  input[type="text"], input[type="number"], select {
+    background: #050f05;
+    border: 1px solid var(--border);
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px;
+    padding: 3px 6px;
+    width: 100%;
+    outline: none;
+  }
+
+  input:focus, select:focus { border-color: var(--green); }
+
+  select option { background: #050f05; }
+
+  .input-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .input-row label { color: var(--green-dim); white-space: nowrap; font-size: 11px; min-width: 55px; }
+
+  /* FILE LIST */
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 4px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.1s;
+  }
+  .file-item:hover { border-color: var(--border); background: var(--green-dark); }
+  .file-item.selected { border-color: var(--green-dim); background: var(--green-dark); }
+  .file-dot { width: 8px; height: 8px; border-radius: 1px; flex-shrink: 0; }
+  .file-name { flex: 1; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-size { color: var(--green-dim); font-size: 10px; min-width: 40px; text-align: right; }
+  .file-frag { font-size: 10px; }
+  .file-frag.bad { color: var(--red); }
+  .file-frag.ok { color: var(--green-dim); }
+
+  /* LOG */
+  #log {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 11px;
+    line-height: 1.6;
+  }
+
+  .log-line { color: var(--green-dim); }
+  .log-line.action { color: var(--green); }
+  .log-line.warn { color: var(--amber); }
+  .log-line.err { color: var(--red); }
+  .log-line.defrag { color: var(--cyan); }
+
+  /* DEFRAG PROGRESS */
+  .progress-bar {
+    height: 14px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--cyan);
+    transition: width 0.1s linear;
+    box-shadow: 0 0 6px var(--cyan);
+  }
+
+  /* MACRO */
+  .macro-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px;
+    font-size: 11px;
+    border: 1px solid transparent;
+  }
+  .macro-item:hover { border-color: var(--border); }
+  .macro-op { flex: 1; color: var(--green); }
+  .macro-del { color: var(--red); cursor: pointer; padding: 0 4px; }
+  .macro-del:hover { background: #1a0000; }
+
+  .separator { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+
+  /* LEGEND */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px; font-size: 10px; }
+  .legend-item { display: flex; gap: 4px; align-items: center; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 1px; }
+
+  .defrag-status {
+    font-family: 'VT323', monospace;
+    font-size: 20px;
+    color: var(--cyan);
+    text-align: center;
+    text-shadow: 0 0 10px var(--cyan);
+    min-height: 26px;
+  }
+
+  .fragmentation-meter {
+    height: 8px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    overflow: hidden;
+    position: relative;
+  }
+
+  .frag-fill {
+    height: 100%;
+    transition: width 0.5s;
+    background: linear-gradient(to right, var(--green), var(--amber), var(--red));
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--green-dim); }
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="header">
+    <h1>⬛ DEFRAG.EXE v4.2</h1>
+    <div class="subtitle">MIRACULOUS DISK DEFRAGMENTER — C: DRIVE — 1024 BLOCKS</div>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat"><span class="stat-label">DRIVE:</span><span class="stat-value">C:\</span></div>
+    <div class="stat"><span class="stat-label">CAPACITY:</span><span class="stat-value">1024 BLK</span></div>
+    <div class="stat"><span class="stat-label">USED:</span><span id="stat-used" class="stat-value">0 BLK</span></div>
+    <div class="stat"><span class="stat-label">FREE:</span><span id="stat-free" class="stat-value good">1024 BLK</span></div>
+    <div class="stat"><span class="stat-label">FILES:</span><span id="stat-files" class="stat-value">0</span></div>
+    <div class="stat"><span class="stat-label">FRAGMENTATION:</span><span id="stat-frag" class="stat-value good">0%</span></div>
+    <div class="stat" style="flex:1"><div class="fragmentation-meter"><div class="frag-fill" id="frag-meter" style="width:0%"></div></div></div>
+  </div>
+
+  <div class="main-layout">
+    <!-- LEFT: FS OPS -->
+    <div class="panel">
+      <div class="panel-title">📁 Filesystem Ops</div>
+
+      <div class="input-row">
+        <label>Filename:</label>
+        <input type="text" id="in-filename" value="FILE001.DAT" maxlength="12">
+      </div>
+      <div class="input-row">
+        <label>Size (blk):</label>
+        <input type="number" id="in-size" value="8" min="1" max="50">
+      </div>
+
+      <button class="btn" onclick="opCreate()">▶ CREATE FILE</button>
+      <button class="btn" onclick="opAppend()">▶ APPEND TO FILE</button>
+      <button class="btn" onclick="opDelete()">▶ DELETE FILE</button>
+      <button class="btn" onclick="opRename()">▶ RENAME FILE</button>
+      <button class="btn" onclick="opModify()">▶ MODIFY (touch)</button>
+
+      <hr class="separator">
+      <div class="panel-title" style="font-size:14px">⚡ BULK OPS</div>
+
+      <div class="input-row">
+        <label>Count:</label>
+        <input type="number" id="in-bulk-count" value="10" min="1" max="50">
+      </div>
+      <button class="btn primary" onclick="bulkCreate()">⬛ BULK CREATE FILES</button>
+      <button class="btn primary" onclick="bulkDeleteRandom()">⬛ BULK DELETE RANDOM</button>
+      <button class="btn primary" onclick="bulkCreateDelete()">⬛ CREATE + DELETE CYCLE</button>
+      <button class="btn primary" onclick="bulkAppendAll()">⬛ APPEND ALL FILES</button>
+
+      <hr class="separator">
+      <div class="panel-title" style="font-size:14px">📋 MACRO</div>
+
+      <div class="input-row">
+        <select id="macro-op-select">
+          <option value="create">Create file</option>
+          <option value="append">Append to file</option>
+          <option value="delete">Delete file</option>
+          <option value="bulkCreate">Bulk create</option>
+          <option value="bulkDelete">Bulk delete</option>
+          <option value="bulkCycle">Create+Delete cycle</option>
+          <option value="appendAll">Append all files</option>
+        </select>
+      </div>
+      <button class="btn" onclick="macroAdd()">+ ADD TO MACRO</button>
+
+      <div id="macro-list" style="max-height:80px;overflow-y:auto;border:1px solid var(--border);padding:2px;"></div>
+
+      <div class="input-row">
+        <label>Repeat:</label>
+        <input type="number" id="macro-repeat" value="5" min="1" max="100">
+      </div>
+      <button class="btn run" onclick="macroRun()">▶▶ RUN MACRO</button>
+      <button class="btn danger" onclick="macroClear()">✕ CLEAR MACRO</button>
+    </div>
+
+    <!-- CENTER: DISK MAP -->
+    <div class="panel disk-panel">
+      <div class="panel-title">💾 DISK BLOCK MAP — C:\</div>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#111;border:1px solid #222"></div> Free</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#0066ff"></div> System</div>
+        <div id="legend-files" class="legend" style="flex:1"></div>
+      </div>
+      <div id="disk-map" style="margin-top:6px;"></div>
+      <hr class="separator">
+      <div class="defrag-status" id="defrag-status">READY</div>
+      <div class="progress-bar" style="margin: 2px 0"><div class="progress-fill" id="defrag-progress" style="width:0%"></div></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
+        <div>
+          <div style="color:var(--green-dim);font-size:11px;margin-bottom:3px">DEFRAG MODE:</div>
+          <select id="defrag-mode">
+            <option value="simple">Simple Defrag</option>
+            <option value="consolidate">Consolidate Free Space</option>
+            <option value="byname">Sort by Filename</option>
+            <option value="bydate">Sort by Modification Date</option>
+            <option value="bysize">Sort by File Size</option>
+          </select>
+        </div>
+        <div>
+          <div style="color:var(--green-dim);font-size:11px;margin-bottom:3px">SPEED:</div>
+          <select id="defrag-speed">
+            <option value="30">Turbo (30ms)</option>
+            <option value="60" selected>Fast (60ms)</option>
+            <option value="120">Normal (120ms)</option>
+            <option value="250">Slow (250ms)</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
+        <button class="btn run" id="btn-defrag" onclick="startDefrag()">▶ RUN DEFRAG</button>
+        <button class="btn danger" id="btn-stop" onclick="stopDefrag()" disabled>■ STOP</button>
+      </div>
+    </div>
+
+    <!-- RIGHT: FILE LIST + LOG -->
+    <div class="panel">
+      <div class="panel-title">📂 Files</div>
+      <div id="file-list" style="flex:1;overflow-y:auto;max-height:300px;border:1px solid var(--border);padding:2px;"></div>
+
+      <hr class="separator">
+      <div class="panel-title" style="font-size:14px">📟 ACTIVITY LOG</div>
+      <div id="log" style="flex:1;border:1px solid var(--border);padding:4px;max-height:280px"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ==========================================
+// DISK MODEL
+// ==========================================
+const DISK_SIZE = 1024;
+const COLS = 32; // blocks per row = 16 rows
+
+// disk[i] = null (free) or fileId (number)
+let disk = new Array(DISK_SIZE).fill(null);
+let files = {}; // id -> { name, color, blocks[], created, modified, size }
+let nextFileId = 1;
+let selectedFileId = null;
+let defragInterval = null;
+let defragRunning = false;
+
+// Reserve first 8 blocks for "system"
+const SYSTEM_BLOCKS = 8;
+for (let i = 0; i < SYSTEM_BLOCKS; i++) disk[i] = 0; // 0 = system
+files[0] = { name: 'SYSTEM', color: '#0044cc', blocks: [...Array(SYSTEM_BLOCKS).keys()], created: 0, modified: 0, size: SYSTEM_BLOCKS };
+
+const FILE_COLORS = [
+  '#cc4400','#cc8800','#aacc00','#00cc44','#00ccaa','#0088cc',
+  '#4400cc','#aa00cc','#cc0066','#cc2200','#66cc00','#00cc88',
+  '#0066cc','#6600cc','#cc0088','#ff6600','#ffaa00','#88ff00',
+];
+let colorIdx = 0;
+function nextColor() { return FILE_COLORS[colorIdx++ % FILE_COLORS.length]; }
+
+// ==========================================
+// DISK OPERATIONS
+// ==========================================
+function findFreeBlocks(count) {
+  let free = [];
+  for (let i = SYSTEM_BLOCKS; i < DISK_SIZE && free.length < count; i++) {
+    if (disk[i] === null) free.push(i);
+  }
+  return free.length >= count ? free : null;
+}
+
+function allocateFile(name, size) {
+  const blocks = findFreeBlocks(size);
+  if (!blocks) { log(`DISK FULL — cannot create ${name}`, 'err'); return null; }
+  const id = nextFileId++;
+  const color = nextColor();
+  blocks.forEach(b => disk[b] = id);
+  files[id] = { name, color, blocks: [...blocks], created: Date.now(), modified: Date.now(), size };
+  log(`Created ${name} [${size} blocks, ${blocks.length} fragments: ${countFragments(blocks)}]`, 'action');
+  return id;
+}
+
+function deleteFile(id) {
+  if (!files[id] || id === 0) return false;
+  files[id].blocks.forEach(b => disk[b] = null);
+  log(`Deleted ${files[id].name}`, 'action');
+  delete files[id];
+  if (selectedFileId === id) selectedFileId = null;
+  return true;
+}
+
+function countFragments(blocks) {
+  if (blocks.length === 0) return 0;
+  const sorted = [...blocks].sort((a,b)=>a-b);
+  let frags = 1;
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] !== sorted[i-1] + 1) frags++;
+  }
+  return frags;
+}
+
+function getFragmentation() {
+  let totalFragments = 0, totalFiles = 0;
+  for (const [id, f] of Object.entries(files)) {
+    if (parseInt(id) === 0) continue;
+    totalFiles++;
+    totalFragments += countFragments(f.blocks) - 1; // extra frags
+  }
+  if (totalFiles === 0) return 0;
+  // score: extra fragment runs / total blocks used
+  const used = disk.filter(x => x !== null && x !== 0).length;
+  if (used === 0) return 0;
+  return Math.min(100, Math.round((totalFragments / Math.max(1, used)) * 200));
+}
+
+function opCreate() {
+  const name = document.getElementById('in-filename').value.trim() || 'FILE.DAT';
+  const size = parseInt(document.getElementById('in-size').value) || 8;
+  allocateFile(name.toUpperCase(), size);
+  render();
+}
+
+function opDelete() {
+  if (!selectedFileId) { log('No file selected', 'warn'); return; }
+  deleteFile(selectedFileId);
+  render();
+}
+
+function opAppend() {
+  if (!selectedFileId) { log('No file selected', 'warn'); return; }
+  const f = files[selectedFileId];
+  const extra = parseInt(document.getElementById('in-size').value) || 4;
+  const newBlocks = findFreeBlocks(extra);
+  if (!newBlocks) { log('DISK FULL', 'err'); return; }
+  newBlocks.forEach(b => { disk[b] = selectedFileId; f.blocks.push(b); });
+  f.modified = Date.now();
+  f.size += extra;
+  log(`Appended ${extra} blocks to ${f.name} — now ${countFragments(f.blocks)} fragments`, 'action');
+  render();
+}
+
+function opRename() {
+  if (!selectedFileId) { log('No file selected', 'warn'); return; }
+  const newName = document.getElementById('in-filename').value.trim().toUpperCase();
+  files[selectedFileId].name = newName;
+  files[selectedFileId].modified = Date.now();
+  log(`Renamed to ${newName}`, 'action');
+  render();
+}
+
+function opModify() {
+  if (!selectedFileId) { log('No file selected', 'warn'); return; }
+  files[selectedFileId].modified = Date.now();
+  log(`Modified ${files[selectedFileId].name} (timestamp updated)`, 'action');
+  render();
+}
+
+// BULK OPS
+const adjectives = ['ALPHA','BETA','GAMMA','DATA','TEMP','CACHE','USER','APP','LOG','IMG','VID','DOC','SYS','NET','BIN','LIB'];
+const exts = ['DAT','TMP','LOG','EXE','DLL','BMP','WAV','TXT','DB','CAB'];
+function rndName() {
+  return adjectives[Math.floor(Math.random()*adjectives.length)] + Math.floor(Math.random()*999) + '.' + exts[Math.floor(Math.random()*exts.length)];
+}
+function rndSize(min=3, max=20) { return min + Math.floor(Math.random()*(max-min)); }
+
+function bulkCreate() {
+  const count = parseInt(document.getElementById('in-bulk-count').value) || 10;
+  for (let i = 0; i < count; i++) {
+    allocateFile(rndName(), rndSize(2, 18));
+  }
+  log(`Bulk created ${count} files`, 'warn');
+  render();
+}
+
+function bulkDeleteRandom() {
+  const count = parseInt(document.getElementById('in-bulk-count').value) || 5;
+  const ids = Object.keys(files).map(Number).filter(id => id !== 0);
+  for (let i = 0; i < count && ids.length > 0; i++) {
+    const idx = Math.floor(Math.random() * ids.length);
+    deleteFile(ids.splice(idx, 1)[0]);
+  }
+  log(`Bulk deleted ${count} files`, 'warn');
+  render();
+}
+
+function bulkCreateDelete() {
+  const count = parseInt(document.getElementById('in-bulk-count').value) || 8;
+  // Create some
+  const created = [];
+  for (let i = 0; i < count; i++) created.push(allocateFile(rndName(), rndSize(2, 12)));
+  // Delete every other
+  for (let i = 0; i < created.length; i += 2) { if (created[i]) deleteFile(created[i]); }
+  // Create more smaller files to fill gaps
+  for (let i = 0; i < Math.ceil(count/2); i++) allocateFile(rndName(), rndSize(8, 20));
+  log(`Create+Delete cycle completed — fragmentation increased!`, 'warn');
+  render();
+}
+
+function bulkAppendAll() {
+  const ids = Object.keys(files).map(Number).filter(id => id !== 0);
+  for (const id of ids) {
+    const extra = rndSize(1, 5);
+    const newBlocks = findFreeBlocks(extra);
+    if (!newBlocks) break;
+    newBlocks.forEach(b => { disk[b] = id; files[id].blocks.push(b); });
+    files[id].modified = Date.now();
+    files[id].size += extra;
+  }
+  log(`Appended to all ${ids.length} files — heavy fragmentation!`, 'warn');
+  render();
+}
+
+// ==========================================
+// MACRO SYSTEM
+// ==========================================
+let macroOps = [];
+
+function macroAdd() {
+  const op = document.getElementById('macro-op-select').value;
+  macroOps.push(op);
+  renderMacro();
+}
+
+function macroRemove(i) {
+  macroOps.splice(i, 1);
+  renderMacro();
+}
+
+function macroClear() {
+  macroOps = [];
+  renderMacro();
+}
+
+async function macroRun() {
+  const repeat = parseInt(document.getElementById('macro-repeat').value) || 5;
+  if (macroOps.length === 0) { log('Macro is empty!', 'warn'); return; }
+  log(`Running macro x${repeat}...`, 'warn');
+  for (let r = 0; r < repeat; r++) {
+    for (const op of macroOps) {
+      switch(op) {
+        case 'create': allocateFile(rndName(), rndSize()); break;
+        case 'append': {
+          const ids = Object.keys(files).map(Number).filter(id => id !== 0);
+          if (ids.length) { const id = ids[Math.floor(Math.random()*ids.length)]; const nb = findFreeBlocks(rndSize(1,5)); if (nb) { nb.forEach(b=>{disk[b]=id;files[id].blocks.push(b);}); files[id].size += nb.length; files[id].modified = Date.now(); } }
+          break;
+        }
+        case 'delete': { const ids = Object.keys(files).map(Number).filter(id => id !== 0); if (ids.length) deleteFile(ids[Math.floor(Math.random()*ids.length)]); break; }
+        case 'bulkCreate': { for(let i=0;i<5;i++) allocateFile(rndName(), rndSize()); break; }
+        case 'bulkDelete': { const ids = Object.keys(files).map(Number).filter(id => id !== 0); for(let i=0;i<3&&ids.length;i++) { const ix=Math.floor(Math.random()*ids.length); deleteFile(ids.splice(ix,1)[0]); } break; }
+        case 'bulkCycle': bulkCreateDelete(); break;
+        case 'appendAll': { const ids2 = Object.keys(files).map(Number).filter(id => id !== 0); for(const id of ids2) { const nb = findFreeBlocks(rndSize(1,3)); if(nb){nb.forEach(b=>{disk[b]=id;files[id].blocks.push(b);}); files[id].size+=nb.length; files[id].modified=Date.now();} } break; }
+      }
+    }
+    render();
+    await sleep(10);
+  }
+  log(`Macro completed x${repeat}`, 'action');
+  render();
+}
+
+function renderMacro() {
+  const el = document.getElementById('macro-list');
+  if (macroOps.length === 0) { el.innerHTML = '<div style="color:var(--green-dim);font-size:10px;padding:2px">Empty — add operations above</div>'; return; }
+  el.innerHTML = macroOps.map((op, i) => `
+    <div class="macro-item">
+      <span style="color:var(--green-dim);font-size:10px">${String(i+1).padStart(2,'0')}.</span>
+      <span class="macro-op">${op}</span>
+      <span class="macro-del" onclick="macroRemove(${i})">✕</span>
+    </div>
+  `).join('');
+}
+
+// ==========================================
+// DEFRAG ENGINE
+// ==========================================
+async function startDefrag() {
+  if (defragRunning) return;
+  defragRunning = true;
+  document.getElementById('btn-defrag').disabled = true;
+  document.getElementById('btn-stop').disabled = false;
+  document.getElementById('defrag-status').textContent = 'ANALYZING...';
+  const mode = document.getElementById('defrag-mode').value;
+  const speed = parseInt(document.getElementById('defrag-speed').value);
+
+  log(`Starting DEFRAG — Mode: ${mode.toUpperCase()}`, 'defrag');
+  await sleep(400);
+  await runDefrag(mode, speed);
+  if (defragRunning) { // didn't get stopped
+    document.getElementById('defrag-status').textContent = 'DEFRAG COMPLETE ✓';
+    document.getElementById('defrag-progress').style.width = '100%';
+    log('Defragmentation complete!', 'defrag');
+  }
+  defragRunning = false;
+  document.getElementById('btn-defrag').disabled = false;
+  document.getElementById('btn-stop').disabled = true;
+  render();
+}
+
+function stopDefrag() {
+  defragRunning = false;
+  document.getElementById('defrag-status').textContent = 'STOPPED';
+  document.getElementById('btn-defrag').disabled = false;
+  document.getElementById('btn-stop').disabled = true;
+  log('Defrag stopped by user', 'warn');
+}
+
+async function runDefrag(mode, speed) {
+  // Build target layout based on mode
+  let fileOrder = Object.keys(files).map(Number).filter(id => id >= 0);
+
+  if (mode === 'simple') {
+    // Just pack files, no reordering
+    fileOrder.sort((a,b) => {
+      if (a === 0) return -1; if (b === 0) return 1;
+      const minA = Math.min(...files[a].blocks);
+      const minB = Math.min(...files[b].blocks);
+      return minA - minB;
+    });
+  } else if (mode === 'consolidate') {
+    // System first, then files in current order, pack together, free at end
+    fileOrder.sort((a,b) => {
+      if (a === 0) return -1; if (b === 0) return 1;
+      return Math.min(...files[a].blocks) - Math.min(...files[b].blocks);
+    });
+  } else if (mode === 'byname') {
+    fileOrder.sort((a,b) => {
+      if (a === 0) return -1; if (b === 0) return 1;
+      return files[a].name.localeCompare(files[b].name);
+    });
+  } else if (mode === 'bydate') {
+    fileOrder.sort((a,b) => {
+      if (a === 0) return -1; if (b === 0) return 1;
+      return files[a].modified - files[b].modified;
+    });
+  } else if (mode === 'bysize') {
+    fileOrder.sort((a,b) => {
+      if (a === 0) return -1; if (b === 0) return 1;
+      return files[b].size - files[a].size;
+    });
+  }
+
+  // Build ideal disk layout
+  let ideal = new Array(DISK_SIZE).fill(null);
+  let cursor = 0;
+  for (const id of fileOrder) {
+    if (!files[id]) continue;
+    const size = files[id].blocks.length;
+    if (cursor + size > DISK_SIZE) break;
+    for (let i = 0; i < size; i++) ideal[cursor + i] = id;
+    cursor += size;
+  }
+
+  // Now animate moving blocks from current to ideal
+  const totalMoves = countDifferences(disk, ideal);
+  let moves = 0;
+
+  for (let targetPos = 0; targetPos < DISK_SIZE; targetPos++) {
+    if (!defragRunning) return;
+    const wantedId = ideal[targetPos];
+    if (disk[targetPos] === wantedId) continue; // already correct
+
+    // Find wantedId somewhere on disk
+    if (wantedId !== null) {
+      // Find a block of this file that isn't in its ideal position
+      let sourcePos = -1;
+      for (let i = 0; i < DISK_SIZE; i++) {
+        if (disk[i] === wantedId && ideal[i] !== wantedId) { sourcePos = i; break; }
+      }
+      if (sourcePos === -1) {
+        // Find any block of this file
+        for (let i = 0; i < DISK_SIZE; i++) {
+          if (disk[i] === wantedId) { sourcePos = i; break; }
+        }
+      }
+      if (sourcePos === -1) continue;
+
+      // Flash source read
+      flashBlock(sourcePos, 'defrag-read');
+      await sleep(speed * 0.4);
+
+      // Move: if target has something, it needs to go somewhere else first
+      if (disk[targetPos] !== null) {
+        // Find free spot to temporarily park it
+        let park = -1;
+        for (let i = DISK_SIZE - 1; i >= 0; i--) {
+          if (disk[i] === null) { park = i; break; }
+        }
+        if (park !== -1) {
+          // park current occupant
+          const displaced = disk[targetPos];
+          disk[park] = displaced;
+          disk[targetPos] = null;
+          const f = files[displaced];
+          if (f) {
+            const bi = f.blocks.indexOf(targetPos);
+            if (bi !== -1) f.blocks[bi] = park;
+          }
+        }
+      }
+
+      // Now move source to target
+      disk[targetPos] = wantedId;
+      disk[sourcePos] = null;
+      const f = files[wantedId];
+      if (f) {
+        const bi = f.blocks.indexOf(sourcePos);
+        if (bi !== -1) f.blocks[bi] = targetPos;
+      }
+
+      flashBlock(targetPos, 'defrag-write');
+      moves++;
+
+      const pct = Math.min(99, Math.round((targetPos / DISK_SIZE) * 100));
+      document.getElementById('defrag-progress').style.width = pct + '%';
+      document.getElementById('defrag-status').textContent = `DEFRAGGING... ${pct}%  [${moves} MOVES]`;
+
+      if (moves % 3 === 0) { render(); await sleep(speed); }
+    }
+  }
+
+  render();
+}
+
+function countDifferences(a, b) {
+  let d = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+  return d;
+}
+
+function flashBlock(pos, cls) {
+  const el = document.querySelector(`[data-block="${pos}"]`);
+  if (el) { el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 200); }
+}
+
+// ==========================================
+// RENDER
+// ==========================================
+function render() {
+  renderDiskMap();
+  renderFileList();
+  renderStats();
+}
+
+function renderDiskMap() {
+  const map = document.getElementById('disk-map');
+  // Set columns
+  map.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
+
+  // Use document fragment for performance
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < DISK_SIZE; i++) {
+    let el = document.querySelector(`[data-block="${i}"]`);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'block';
+      el.dataset.block = i;
+    }
+    const id = disk[i];
+    if (id === null) {
+      el.className = 'block free';
+      el.style.background = '';
+      el.style.border = '';
+      el.dataset.tip = `Block ${i}: FREE`;
+    } else {
+      el.className = 'block used';
+      const f = files[id];
+      const color = f ? f.color : '#444';
+      el.style.background = color;
+      el.style.border = 'none';
+      el.dataset.tip = f ? `Block ${i}: ${f.name}` : `Block ${i}`;
+      // highlight selected file
+      if (id === selectedFileId) {
+        el.style.filter = 'brightness(1.8)';
+        el.style.outline = '1px solid white';
+      } else {
+        el.style.filter = '';
+        el.style.outline = '';
+      }
+    }
+    frag.appendChild(el);
+  }
+  map.innerHTML = '';
+  map.appendChild(frag);
+}
+
+function renderFileList() {
+  const el = document.getElementById('file-list');
+  const ids = Object.keys(files).map(Number).filter(id => id !== 0).sort((a,b) => files[a].name.localeCompare(files[b].name));
+
+  // Update legend
+  const legend = document.getElementById('legend-files');
+  legend.innerHTML = '';
+
+  if (ids.length === 0) { el.innerHTML = '<div style="color:var(--green-dim);font-size:11px;padding:4px">No files — create some!</div>'; return; }
+
+  el.innerHTML = '';
+  for (const id of ids) {
+    const f = files[id];
+    const frags = countFragments(f.blocks);
+    const isFrag = frags > 1;
+    const item = document.createElement('div');
+    item.className = 'file-item' + (id === selectedFileId ? ' selected' : '');
+    item.onclick = () => { selectedFileId = (selectedFileId === id) ? null : id; render(); };
+    item.innerHTML = `
+      <div class="file-dot" style="background:${f.color}"></div>
+      <span class="file-name" title="${f.name}">${f.name}</span>
+      <span class="file-size">${f.blocks.length}blk</span>
+      <span class="file-frag ${isFrag?'bad':'ok'}">${frags}F</span>
+    `;
+    el.appendChild(item);
+
+    // Legend entry
+    const li = document.createElement('div');
+    li.className = 'legend-item';
+    li.innerHTML = `<div class="legend-dot" style="background:${f.color}"></div>`;
+    legend.appendChild(li);
+  }
+}
+
+function renderStats() {
+  const used = disk.filter(x => x !== null).length;
+  const free = DISK_SIZE - used;
+  const files_count = Object.keys(files).filter(id => parseInt(id) !== 0).length;
+  const frag = getFragmentation();
+
+  document.getElementById('stat-used').textContent = `${used} BLK`;
+  document.getElementById('stat-free').textContent = `${free} BLK`;
+  document.getElementById('stat-files').textContent = files_count;
+
+  const fragEl = document.getElementById('stat-frag');
+  fragEl.textContent = `${frag}%`;
+  fragEl.className = 'stat-value ' + (frag < 20 ? 'good' : frag < 50 ? '' : 'bad');
+  if (frag >= 50) fragEl.style.color = 'var(--red)';
+  else if (frag >= 20) fragEl.style.color = 'var(--amber)';
+  else fragEl.style.color = 'var(--green)';
+
+  document.getElementById('frag-meter').style.width = frag + '%';
+}
+
+// ==========================================
+// LOG
+// ==========================================
+const logEl = () => document.getElementById('log');
+function log(msg, type = '') {
+  const line = document.createElement('div');
+  line.className = `log-line ${type}`;
+  const ts = new Date().toTimeString().slice(0,8);
+  line.textContent = `[${ts}] ${msg}`;
+  logEl().appendChild(line);
+  logEl().scrollTop = logEl().scrollHeight;
+  // Keep log from growing too large
+  while (logEl().children.length > 80) logEl().removeChild(logEl().firstChild);
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ==========================================
+// INIT
+// ==========================================
+function init() {
+  renderMacro();
+  // Pre-create some files to get started
+  log('System initialized — C:\\ drive online', 'action');
+  log('Create files to increase fragmentation, then run DEFRAG!', '');
+  allocateFile('DOORS.EXE', 20);
+  allocateFile('KERNEL32.DLL', 12);
+  allocateFile('EXPLORER.EXE', 15);
+  allocateFile('README.TXT', 4);
+  allocateFile('CONFIG.SYS', 3);
+  allocateFile('AUTOEXEC.BAT', 2);
+  // Delete some to create gaps
+  const ids = Object.keys(files).map(Number).filter(id => id > 0);
+  deleteFile(ids[1]); // delete KERNEL32 to create gap
+  deleteFile(ids[3]); // delete README
+  // Create more to fill gaps unevenly
+  allocateFile('TEMP001.DAT', 18);
+  allocateFile('CACHE.TMP', 8);
+  allocateFile('PAGEFILE.SYS', 25);
+  deleteFile(ids[0]); // delete DOORS
+  allocateFile('MSDOS.SYS', 30);
+  allocateFile('IO.SYS', 6);
+  log('Initial files created — fragmentation: ' + getFragmentation() + '%', 'warn');
+  render();
+}
+
+init();
+</script>
+</body>
+</html>
