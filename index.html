@@ -366,16 +366,9 @@
     <!-- CENTER: DISK MAP -->
     <div class="panel disk-panel">
       <div class="panel-title">💾 DISK BLOCK MAP — C:\</div>
-      <div class="legend">
-        <div class="legend-item"><div class="legend-dot" style="background:#111;border:1px solid #222"></div> Free</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#0066ff"></div> System</div>
-        <div id="legend-files" class="legend" style="flex:1"></div>
-      </div>
-      <div id="disk-map" style="margin-top:6px;"></div>
-      <hr class="separator">
-      <div class="defrag-status" id="defrag-status">READY</div>
-      <div class="progress-bar" style="margin: 2px 0"><div class="progress-fill" id="defrag-progress" style="width:0%"></div></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
+
+      <!-- DEFRAG CONTROLS — top -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
         <div>
           <div style="color:var(--green-dim);font-size:11px;margin-bottom:3px">DEFRAG MODE:</div>
           <select id="defrag-mode">
@@ -396,10 +389,22 @@
           </select>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
         <button class="btn run" id="btn-defrag" onclick="startDefrag()">▶ RUN DEFRAG</button>
         <button class="btn danger" id="btn-stop" onclick="stopDefrag()" disabled>■ STOP</button>
       </div>
+      <div class="defrag-status" id="defrag-status">READY</div>
+      <div class="progress-bar" style="margin: 2px 0"><div class="progress-fill" id="defrag-progress" style="width:0%"></div></div>
+
+      <hr class="separator">
+
+      <!-- BLOCK MAP -->
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#111;border:1px solid #222"></div> Free</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#0066ff"></div> System</div>
+        <div id="legend-files" class="legend" style="flex:1"></div>
+      </div>
+      <div id="disk-map" style="margin-top:6px;flex:1;overflow-y:auto;"></div>
     </div>
 
     <!-- RIGHT: FILE LIST + LOG + HW -->
@@ -423,25 +428,27 @@
       <div class="panel-title" style="font-size:14px">📟 Activity Log</div>
       <div id="log" style="flex:1;border:1px solid var(--border);padding:4px;min-height:80px;max-height:280px;overflow-y:auto;"></div>
 
-      <!-- Manual FS ops (collapsed) -->
+      <!-- Manual FS ops — always expanded -->
       <hr class="separator">
+      <div class="panel-title" style="font-size:14px">📁 Filesystem Ops</div>
+      <div class="input-row">
+        <label>Filename:</label>
+        <input type="text" id="in-filename" value="FILE001.DAT" maxlength="12">
+      </div>
+      <div class="input-row">
+        <label>Size (blk):</label>
+        <input type="number" id="in-size" value="8" min="1" max="50">
+      </div>
+      <button class="btn" onclick="opCreate()">▶ CREATE FILE</button>
+      <button class="btn" onclick="opAppend()">▶ APPEND TO FILE</button>
+      <button class="btn" onclick="opDelete()">▶ DELETE FILE</button>
+      <button class="btn" onclick="opRename()">▶ RENAME FILE</button>
+      <button class="btn" onclick="opModify()">▶ MODIFY (touch)</button>
+
+      <!-- Bulk ops — collapsed by default -->
       <details>
-        <summary style="color:var(--green-dim);font-size:11px;cursor:pointer;user-select:none;">▶ Manual Filesystem Ops</summary>
+        <summary style="color:var(--green-dim);font-size:11px;cursor:pointer;user-select:none;margin-top:4px;">▶ Bulk Operations</summary>
         <div style="display:flex;flex-direction:column;gap:5px;margin-top:5px;">
-          <div class="input-row">
-            <label>Filename:</label>
-            <input type="text" id="in-filename" value="FILE001.DAT" maxlength="12">
-          </div>
-          <div class="input-row">
-            <label>Size (blk):</label>
-            <input type="number" id="in-size" value="8" min="1" max="50">
-          </div>
-          <button class="btn" onclick="opCreate()">▶ CREATE FILE</button>
-          <button class="btn" onclick="opAppend()">▶ APPEND TO FILE</button>
-          <button class="btn" onclick="opDelete()">▶ DELETE FILE</button>
-          <button class="btn" onclick="opRename()">▶ RENAME FILE</button>
-          <button class="btn" onclick="opModify()">▶ MODIFY (touch)</button>
-          <hr class="separator">
           <div class="input-row">
             <label>Count:</label>
             <input type="number" id="in-bulk-count" value="10" min="1" max="50">
@@ -716,10 +723,10 @@ function allocateFile(name, size, opts = {}) {
 
 function deleteFile(id) {
   if (!files[id] || id === 0) return false;
-  const name = files[id].name;
   files[id].blocks.forEach(b => disk[b] = null);
   delete files[id];
-  if (selectedFileId === id) selectedFileId = null;
+  // Always clear selection if this file was selected or selected file no longer exists
+  if (selectedFileId === id || !files[selectedFileId]) selectedFileId = null;
   return true;
 }
 
@@ -799,18 +806,6 @@ async function runSoftware(swId) {
   if (getRamFree() < sw.ramReq) {
     log(`${sw.name}: NOT ENOUGH RAM (need ${sw.ramReq} KB, free: ${getRamFree()} KB)`, 'err');
     return;
-  }
-
-  // Check persistent files exist
-  for (const pf of sw.persistentFiles) {
-    const fid = sw.persistentFileIds[pf.key];
-    if (!files[fid]) {
-      log(`${sw.name}: CRASH — missing file ${pf.name}!`, 'crash');
-      rt.running = false;
-      rt.crashed = true;
-      render();
-      return;
-    }
   }
 
   rt.running = true;
@@ -1151,8 +1146,10 @@ function opCreate() {
 function opDelete() {
   if (!selectedFileId || selectedFileId === 0) { log('No file selected', 'warn'); return; }
   const f = files[selectedFileId];
-  // if (f && f.persistent) { log(`Cannot delete ${f.name} — managed by software`, 'warn'); return; }
+  if (!f) return;
+  const name = f.name;
   deleteFile(selectedFileId);
+  log(`Deleted ${name}`, 'action');
   render();
 }
 function opAppend() {
@@ -1234,12 +1231,28 @@ function renderDiskMap() {
   const frag = document.createDocumentFragment();
   for (let i = 0; i < DISK_SIZE; i++) {
     let el = document.querySelector(`[data-block="${i}"]`);
-    if (!el) { el = document.createElement('div'); el.className = 'block'; el.dataset.block = i; }
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'block';
+      el.dataset.block = i;
+      el.addEventListener('click', () => {
+        const bid = disk[parseInt(el.dataset.block)];
+        if (bid !== null && bid !== 0 && files[bid]) {
+          selectedFileId = (selectedFileId === bid) ? null : bid;
+        } else {
+          selectedFileId = null;
+        }
+        renderDiskMap();
+        renderFileList();
+      });
+    }
     const id = disk[i];
     if (id === null) {
       el.className = 'block free';
       el.style.background = '';
       el.style.border = '';
+      el.style.filter = '';
+      el.style.outline = '';
       el.dataset.tip = `Block ${i}: FREE`;
     } else {
       el.className = 'block used';
@@ -1321,7 +1334,8 @@ function renderSoftwareList() {
     el.innerHTML = '<div style="color:var(--green-dim);font-size:11px">No software installed</div>';
     return;
   }
-  el.innerHTML = '';
+  // Remove placeholder text if present
+  if (el.querySelector('div:not([id])')) el.innerHTML = '';
   for (const id of ids) {
     renderSoftwareCard(id, el);
   }
@@ -1332,57 +1346,77 @@ function renderSoftwareCard(swId, container) {
   const rt = swRuntime[swId];
   if (!sw || !rt) return;
 
+  const running = rt.running;
+  const crashed = rt.crashed;
+  const pct = Math.round((rt.progress || 0) * 100);
+
   let card = document.getElementById(`sw-card-${swId}`);
-  const isNew = !card;
-  if (isNew) {
+  if (!card) {
+    // Build card skeleton once
     card = document.createElement('div');
     card.id = `sw-card-${swId}`;
     card.className = 'software-card';
+    card.innerHTML = `
+      <div class="sw-header">
+        <span class="sw-name" data-role="name">${sw.name}</span>
+        <span class="sw-badge ${sw.badgeType}" data-role="badge">${sw.badgeType === 'server' ? '⟳ SERVER' : '▶ PROG'}</span>
+      </div>
+      <div class="sw-info" data-role="info"></div>
+      <div class="sw-progress" data-role="progress-wrap" style="display:none"><div class="sw-progress-fill" data-role="progress-fill" style="width:0%"></div></div>
+      <div class="sw-btn-row" data-role="btn-row"></div>
+    `;
+    if (container) container.appendChild(card);
   }
 
-  const running = rt.running;
-  const crashed = rt.crashed;
+  // Update card class
   card.className = `software-card${running ? ' running' : ''}${crashed ? ' crashed' : ''}`;
 
-  const pct = Math.round((rt.progress || 0) * 100);
-  const badgeColor = sw.badgeType === 'server' ? 'var(--magenta)' : 'var(--green-dim)';
+  // Update name style
+  const nameEl = card.querySelector('[data-role="name"]');
+  nameEl.className = `sw-name ${running ? 'running-name' : crashed ? 'crashed-name' : ''}`;
 
-  // Check missing files
-  let missingFiles = [];
-  for (const pf of sw.persistentFiles) {
-    if (!files[sw.persistentFileIds[pf.key]]) missingFiles.push(pf.name);
-  }
-  const hasMissing = missingFiles.length > 0;
-  if (hasMissing && !rt.running) { rt.crashed = true; }
+  // Update info
+  const infoEl = card.querySelector('[data-role="info"]');
+  const infoHtml = `RAM: <span>${sw.ramReq} KB</span> &nbsp; Files: <span>${sw.persistentFiles.length}</span>`
+    + (crashed ? `<br><span style="color:var(--red)">⚠ CRASHED</span>` : '');
+  if (infoEl.innerHTML !== infoHtml) infoEl.innerHTML = infoHtml;
 
-  let btnHtml = '';
+  // Update progress bar
+  const progWrap = card.querySelector('[data-role="progress-wrap"]');
+  const progFill = card.querySelector('[data-role="progress-fill"]');
   if (running) {
-    if (sw.isServer) {
-      btnHtml = `<button class="btn stop-btn sw-btn" onclick="stopSoftware('${swId}')">■ STOP</button>`;
-    }
-    // non-server: just show running, no stop
-  } else if (crashed || hasMissing) {
-    btnHtml = `<button class="btn danger sw-btn" onclick="reinstallSoftware('${swId}')">↺ REINSTALL</button>`;
+    progWrap.style.display = '';
+    progFill.style.width = pct + '%';
   } else {
-    const canRun = getRamFree() >= sw.ramReq || running;
-    btnHtml = `<button class="btn run sw-btn" onclick="runSoftware('${swId}')" ${canRun?'':'disabled'}>▶ RUN</button>`;
+    progWrap.style.display = 'none';
   }
 
-  card.innerHTML = `
-    <div class="sw-header">
-      <span class="sw-name ${running?'running-name':crashed?'crashed-name':''}">${sw.name}</span>
-      <span class="sw-badge ${sw.badgeType}">${sw.badgeType === 'server' ? '⟳ SERVER' : '▶ PROG'}</span>
-    </div>
-    <div class="sw-info">
-      RAM: <span>${sw.ramReq} KB</span> &nbsp; 
-      Files: <span>${sw.persistentFiles.length}</span>
-      ${crashed || hasMissing ? `<br><span style="color:var(--red)">⚠ CRASHED${hasMissing?' — missing: '+missingFiles.join(', '):''}</span>` : ''}
-    </div>
-    ${running ? `<div class="sw-progress"><div class="sw-progress-fill" style="width:${pct}%"></div></div>` : ''}
-    <div class="sw-btn-row">${btnHtml}</div>
-  `;
+  // Update button — only change innerHTML if the button *type* needs to change
+  // to avoid disrupting active click handlers
+  const btnRow = card.querySelector('[data-role="btn-row"]');
+  const existingBtn = btnRow.querySelector('button');
+  const existingRole = existingBtn ? existingBtn.dataset.btnRole : '';
 
-  if (isNew && container) container.appendChild(card);
+  let neededRole, neededHtml;
+  if (running && sw.isServer) {
+    neededRole = 'stop';
+    neededHtml = `<button class="btn stop-btn sw-btn" data-btn-role="stop" onclick="stopSoftware('${swId}')">■ STOP</button>`;
+  } else if (running) {
+    neededRole = 'running';
+    neededHtml = `<button class="btn sw-btn" data-btn-role="running" disabled style="color:var(--cyan);border-color:var(--cyan);opacity:0.6;">⟳ RUNNING...</button>`;
+  } else if (crashed) {
+    neededRole = 'reinstall';
+    neededHtml = `<button class="btn danger sw-btn" data-btn-role="reinstall" onclick="reinstallSoftware('${swId}')">↺ REINSTALL</button>`;
+  } else {
+    const canRun = getRamFree() >= sw.ramReq;
+    neededRole = canRun ? 'run' : 'run-disabled';
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN</button>`;
+  }
+
+  // Only update button DOM if role changed (preserves the button element during server loop)
+  if (existingRole !== neededRole) {
+    btnRow.innerHTML = neededHtml;
+  }
 }
 
 function renderShop() {
