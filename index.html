@@ -1134,7 +1134,7 @@ async function runDefrag(mode, speed) {
       for (let i = targetPos+1; i < DISK_SIZE; i++) {
         if (disk[i] === wantedId && ideal[i] !== wantedId) { sourcePos = i; break; }
       }
-      if (sourcePos === -1) for (let i = 0; i < DISK_SIZE; i++) { if (disk[i] === wantedId) { sourcePos = i; break; } }
+      if (sourcePos === -1) for (let i = targetPos+1; i < DISK_SIZE; i++) { if (disk[i] === wantedId) { sourcePos = i; break; } }
       if (sourcePos === -1) continue;
 
       if (disk[targetPos] !== null) {
