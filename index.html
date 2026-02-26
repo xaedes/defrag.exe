@@ -121,6 +121,20 @@
     100% { opacity: 0; transform: translateY(-60px); }
   }
 
+  .coin-anim {
+    position: fixed;
+    pointer-events: none;
+    font-size: 14px;
+    animation: coin-pop 1.2s ease-out forwards;
+    z-index: 2001;
+    transform-origin: center;
+  }
+  @keyframes coin-pop {
+    0%   { opacity: 1; transform: translateY(0) scale(1.3); }
+    40%  { opacity: 1; transform: translateY(-18px) scale(1); }
+    100% { opacity: 0; transform: translateY(-36px) scale(0.7); }
+  }
+
   .main-layout {
     display: grid;
     grid-template-columns: 240px 1fr 280px;
@@ -1130,6 +1144,13 @@ async function runDefrag(mode, speed) {
       }
 
       await moveBlockOnDisk(sourcePos, targetPos);
+      // Reward: if the newly placed block is adjacent to the previous block of the same file, pay out
+      if (targetPos > 0 && disk[targetPos - 1] !== null && disk[targetPos - 1] === disk[targetPos]) {
+        const reward = 0.01;
+        playerMoney += reward;
+        renderMoney();
+        showCoinAtBlock(targetPos);
+      }
       moves++;
       const pct = Math.min(99, Math.round((targetPos / DISK_SIZE) * 100));
       document.getElementById('defrag-progress').style.width = pct + '%';
@@ -2169,6 +2190,20 @@ async function runChkdsk() {
   btn.textContent = '▶ CHKDSK';
   btn.classList.remove('danger');
   render();
+}
+
+
+function showCoinAtBlock(blockIdx) {
+  const el = document.querySelector(`[data-block="${blockIdx}"]`);
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const coin = document.createElement('div');
+  coin.className = 'coin-anim';
+  coin.textContent = '🪙';
+  coin.style.left = (rect.left + rect.width / 2 - 9) + 'px';
+  coin.style.top  = (rect.top  - 4) + 'px';
+  document.body.appendChild(coin);
+  setTimeout(() => coin.remove(), 1300);
 }
 
 
