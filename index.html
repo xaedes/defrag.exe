@@ -1123,31 +1123,13 @@ async function runDefrag(mode, speed) {
       if (sourcePos === -1) for (let i = 0; i < DISK_SIZE; i++) { if (disk[i] === wantedId) { sourcePos = i; break; } }
       if (sourcePos === -1) continue;
 
-      // Read from source
-      await readBlock(sourcePos);
-
       if (disk[targetPos] !== null) {
         let park = -1;
         for (let i = DISK_SIZE - 1; i >= 0; i--) { if (disk[i] === null) { park = i; break; } }
-        if (park !== -1) {
-          const displaced = disk[targetPos];
-          // Displace the block at targetPos out to a free parking spot
-          await readBlock(targetPos);
-          await writeBlock(park);
-          disk[park] = displaced;
-          disk[targetPos] = null;
-          const f = files[displaced];
-          if (f) { const bi = f.blocks.indexOf(targetPos); if (bi !== -1) f.blocks[bi] = park; }
-        }
+        if (park !== -1) await moveBlockOnDisk(targetPos, park);
       }
 
-      disk[targetPos] = wantedId;
-      disk[sourcePos] = null;
-      const f = files[wantedId];
-      if (f) { const bi = f.blocks.indexOf(sourcePos); if (bi !== -1) f.blocks[bi] = targetPos; }
-
-      // Write to target
-      await writeBlock(targetPos);
+      await moveBlockOnDisk(sourcePos, targetPos);
       moves++;
       const pct = Math.min(99, Math.round((targetPos / DISK_SIZE) * 100));
       document.getElementById('defrag-progress').style.width = pct + '%';
@@ -1176,6 +1158,19 @@ async function writeBlock(blockIdx) {
   const head = await acquireAndMoveWriteHead(blockIdx);
   flashBlock(blockIdx, 'defrag-write');
   releaseHead(head);
+}
+
+// Move one block's data from one disk position to another:
+// reads from `from`, writes to `to`, updates disk[] and the owning file's block list.
+// `to` must already be free (disk[to] === null).
+async function moveBlockOnDisk(from, to) {
+  await readBlock(from);
+  await writeBlock(to);
+  const id = disk[from];
+  disk[to] = id;
+  disk[from] = null;
+  const f = files[id];
+  if (f) { const bi = f.blocks.indexOf(from); if (bi !== -1) f.blocks[bi] = to; }
 }
 
 // ==========================================
