@@ -1678,18 +1678,18 @@ function renderSoftwareCard(swId, container) {
         <span class="sw-badge ${sw.badgeType}" data-role="badge">${sw.badgeType === 'server' ? '⟳ SERVER' : '▶ PROG'}</span>
       </div>
       <div class="sw-info" data-role="info"></div>
-      <div data-role="instances"></div>
       <div class="sw-btn-row" data-role="btn-row"></div>
+      <div data-role="instances"></div>
     `;
     if (container) container.appendChild(card);
   }
 
-  // Card border state: running if any instance running, else normal
-  card.className = `software-card${anyRunning ? ' running' : ''}`;
+  // Card border state
+  card.className = `software-card${anyRunning ? ' running' : ''}${anyCrashed && !anyRunning ? ' crashed' : ''}`;
 
   // Name style
   const nameEl = card.querySelector('[data-role="name"]');
-  nameEl.className = `sw-name ${anyRunning ? 'running-name' : ''}`;
+  nameEl.className = `sw-name ${anyRunning ? 'running-name' : anyCrashed && !anyRunning ? 'crashed-name' : ''}`;
 
   // Info line
   const infoEl = card.querySelector('[data-role="info"]');
@@ -1698,14 +1698,41 @@ function renderSoftwareCard(swId, container) {
     + (runCount > 0 ? ` &nbsp; <span style="color:var(--cyan)">×${runCount} running</span>` : '');
   if (infoEl.innerHTML !== infoHtml) infoEl.innerHTML = infoHtml;
 
-  // Per-instance progress rows
+  // RUN / STOP-ALL / REINSTALL buttons
+  const btnRow = card.querySelector('[data-role="btn-row"]');
+  const canRun = getRamFree() >= sw.ramReq;
+  const existingBtn = btnRow.querySelector('button');
+  const existingRole = existingBtn ? existingBtn.dataset.btnRole : '';
+
+  let neededRole, neededHtml;
+  if (anyRunning && sw.isServer) {
+    neededRole = anyCrashed ? 'run-server-crash' : 'run-server';
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ ADD INSTANCE</button>
+                  <button class="btn stop-btn sw-btn" onclick="stopSoftware('${swId}')">■ STOP ALL</button>`
+                  + (anyCrashed ? `<button class="btn danger sw-btn" onclick="reinstallSoftware('${swId}')">↺ REINSTALL</button>` : '');
+  } else if (anyRunning && !sw.isServer) {
+    neededRole = anyCrashed ? 'run-multi-crash' : 'run-multi';
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN AGAIN</button>`
+                  + (anyCrashed ? `<button class="btn danger sw-btn" onclick="reinstallSoftware('${swId}')">↺ REINSTALL</button>` : '');
+  } else if (anyCrashed) {
+    neededRole = 'crashed';
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="crashed" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN</button>
+                  <button class="btn danger sw-btn" onclick="reinstallSoftware('${swId}')">↺ REINSTALL</button>`;
+  } else {
+    neededRole = canRun ? 'run' : 'run-disabled';
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN</button>`;
+  }
+
+  if (existingRole !== neededRole) {
+    btnRow.innerHTML = neededHtml;
+  }
+
+  // Per-instance progress rows (below buttons)
   const instContainer = card.querySelector('[data-role="instances"]');
-  // Build a map of existing rows by instance id
   const existingRows = {};
   for (const row of instContainer.querySelectorAll('[data-inst-id]')) {
     existingRows[row.dataset.instId] = row;
   }
-  // Add/update rows for current instances
   const activeIds = new Set();
   for (const inst of instances) {
     activeIds.add(String(inst.id));
@@ -1724,36 +1751,11 @@ function renderSoftwareCard(swId, container) {
          </div>
          ${inst.running && sw.isServer
            ? `<button class="btn stop-btn" style="padding:1px 5px;font-size:13px;min-width:0" onclick="stopSoftware('${swId}',${inst.id})">■</button>`
-           : `<span style="color:var(--green-dim);font-size:10px;min-width:28px;text-align:right">#${inst.id}</span>`}`;
+           : ''}`;
     row.innerHTML = `<span style="color:var(--green-dim);font-size:10px;min-width:22px">#${inst.id}</span>${crashedHtml}`;
   }
-  // Remove rows for instances no longer present
   for (const [idStr, row] of Object.entries(existingRows)) {
     if (!activeIds.has(idStr)) row.remove();
-  }
-
-  // RUN / STOP-ALL button
-  const btnRow = card.querySelector('[data-role="btn-row"]');
-  const canRun = getRamFree() >= sw.ramReq;
-  const existingBtn = btnRow.querySelector('button');
-  const existingRole = existingBtn ? existingBtn.dataset.btnRole : '';
-
-  let neededRole, neededHtml;
-  if (anyRunning && !sw.isServer) {
-    // Non-server running: show disabled indicator + run again if RAM ok
-    neededRole = 'run-multi';
-    neededHtml = `<button class="btn run sw-btn" data-btn-role="run-multi" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN AGAIN</button>`;
-  } else if (anyRunning && sw.isServer) {
-    neededRole = 'run-server';
-    neededHtml = `<button class="btn run sw-btn" data-btn-role="run-server" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ ADD INSTANCE</button>
-                  <button class="btn stop-btn sw-btn" data-btn-role="stop-all" onclick="stopSoftware('${swId}')">■ STOP ALL</button>`;
-  } else {
-    neededRole = canRun ? 'run' : 'run-disabled';
-    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN</button>`;
-  }
-
-  if (existingRole !== neededRole) {
-    btnRow.innerHTML = neededHtml;
   }
 }
 
