@@ -458,6 +458,7 @@
         <label>Size (blk):</label>
         <input type="number" id="in-size" value="8" min="1" max="50">
       </div>
+      <button class="btn" id="btn-chkdsk" onclick="toggleChkdsk()">▶ CHKDSK</button>
       <button class="btn" onclick="opCreate()">▶ CREATE FILE</button>
       <button class="btn" onclick="opAppend()">▶ APPEND TO FILE</button>
       <button class="btn" onclick="opDelete()">▶ DELETE FILE</button>
@@ -495,6 +496,8 @@ let files = {};
 let nextFileId = 1;
 let selectedFileId = null;
 let defragRunning = false;
+let chkdskRunning = false;
+let chkdskStopRequested = false;
 let playerMoney = 0;
 
 // swInstances is declared near RAM TRACKING section
@@ -1880,8 +1883,76 @@ function renderShop() {
 }
 
 // ==========================================
-// LOG
+// CHKDSK
 // ==========================================
+function toggleChkdsk() {
+  if (chkdskRunning) {
+    chkdskStopRequested = true;
+  } else {
+    runChkdsk();
+  }
+}
+
+async function runChkdsk() {
+  if (chkdskRunning) return;
+  chkdskRunning = true;
+  chkdskStopRequested = false;
+  const btn = document.getElementById('btn-chkdsk');
+  btn.textContent = '■ STOP CHKDSK';
+  btn.classList.add('danger');
+  log('CHKDSK: Starting disk scan...', 'warn');
+
+  let corrupted = 0;
+  let checked = 0;
+
+  for (let i = 0; i < DISK_SIZE; i++) {
+    if (chkdskStopRequested) break;
+
+    const id = disk[i];
+
+    // Only care about blocks that have a file id but the file doesn't exist
+    if (id !== null && id !== 0 && !files[id]) {
+      // Corrupt block — read it (so user sees the head travel)
+      const rHead = await acquireAndMoveReadHead(i);
+      flashBlock(i, 'defrag-read');
+      releaseHead(rHead);
+
+      if (chkdskStopRequested) { disk[i] = null; corrupted++; render(); break; }
+
+      // Write-clear it
+      const wHead = await acquireAndMoveWriteHead(i);
+      flashBlock(i, 'defrag-write');
+      disk[i] = null;
+      releaseHead(wHead);
+
+      corrupted++;
+      render();
+    }
+
+    checked++;
+
+    // Update status every 16 blocks to avoid flooding
+    if (checked % 16 === 0) {
+      log(`CHKDSK: ${checked}/${DISK_SIZE} blocks checked, ${corrupted} corrupt fixed`, 'defrag');
+      await sleep(0); // yield so UI can update
+    }
+  }
+
+  const stopped = chkdskStopRequested && checked < DISK_SIZE;
+  if (stopped) {
+    log(`CHKDSK: Stopped at block ${checked}. Fixed ${corrupted} corrupt block(s).`, 'warn');
+  } else {
+    log(`CHKDSK: Scan complete. ${checked} blocks checked, ${corrupted} corrupt block(s) fixed.`, corrupted > 0 ? 'warn' : 'defrag');
+  }
+
+  chkdskRunning = false;
+  chkdskStopRequested = false;
+  btn.textContent = '▶ CHKDSK';
+  btn.classList.remove('danger');
+  render();
+}
+
+
 const logEl = () => document.getElementById('log');
 function log(msg, type = '') {
   const line = document.createElement('div');
