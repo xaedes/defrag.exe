@@ -841,6 +841,13 @@ const SOFTWARE_CATALOG = [
       { op: 'append', file: 'crunch_log', size: 2 },
       { op: 'earn', amount: 3.50 },
       { op: 'delete', file: null },
+      // Truncate crunch_log when it grows beyond 128 blocks
+      { op: 'push_size', file: 'crunch_log' },
+      { op: 'push', value: 128 },
+      { op: 'compare', cmp: 'lt' },   // stack: [crunch_log.size < 128]
+      { op: 'if' },                    // if true (size < 128): skip next op (exit), so we do truncate
+      { op: 'exit' },                  // size is fine, bail out early
+      { op: 'truncate', file: 'crunch_log', offset: 0 },  // free all blocks from start → truncate to empty
     ],
   },
   {
