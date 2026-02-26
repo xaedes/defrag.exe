@@ -1324,6 +1324,9 @@ async function executeSoftwareOp(sw, inst, op) {
       // Free the blocks in the range, moving write head to each
       for (let ti = offset; ti < offset + count; ti++) {
         const blockIdx = tf.blocks[ti];
+        if (blockIdx === undefined) {
+          continue;
+        }
         const head = await acquireAndMoveWriteHead(blockIdx);
         flashBlock(blockIdx, 'defrag-write');
         disk[blockIdx] = null;
