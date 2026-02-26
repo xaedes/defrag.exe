@@ -163,20 +163,18 @@
     position: relative;
   }
 
-  .block:hover::after {
-    content: attr(data-tip);
-    position: absolute;
-    bottom: 110%;
-    left: 50%;
-    transform: translateX(-50%);
+  #block-tooltip {
+    position: fixed;
     background: #000;
     border: 1px solid var(--green);
     color: var(--green);
     padding: 2px 6px;
     font-size: 10px;
     white-space: nowrap;
-    z-index: 100;
+    z-index: 500;
     pointer-events: none;
+    display: none;
+    font-family: 'Share Tech Mono', monospace;
   }
 
   .block.free { background: var(--bg2); border: 1px solid #111; }
@@ -349,6 +347,7 @@
 </style>
 </head>
 <body>
+<div id="block-tooltip"></div>
 <div class="screen">
   <div class="header">
     <h1>⬛ DEFRAG.EXE v4.2</h1>
@@ -1441,6 +1440,63 @@ function flashBlock(pos, cls) {
   const el = document.querySelector(`[data-block="${pos}"]`);
   if (el) { el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 150); }
 }
+
+// ==========================================
+// BLOCK TOOLTIP
+// ==========================================
+(function() {
+  const tooltip = document.getElementById('block-tooltip');
+
+  document.getElementById('disk-map').addEventListener('mouseover', e => {
+    const block = e.target.closest('[data-block]');
+    if (!block || !block.dataset.tip) { tooltip.style.display = 'none'; return; }
+
+    tooltip.textContent = block.dataset.tip;
+    tooltip.style.display = 'block';
+
+    const map = document.getElementById('disk-map');
+    const mapRect = map.getBoundingClientRect();
+    const blockRect = block.getBoundingClientRect();
+    const tipW = tooltip.offsetWidth;
+    const tipH = tooltip.offsetHeight;
+
+    const blockIdx = parseInt(block.dataset.block);
+    const col = blockIdx % COLS;
+    const row = Math.floor(blockIdx / COLS);
+
+    // Vertical: first row → below block, otherwise above
+    let top;
+    if (row === 0) {
+      top = blockRect.bottom + 2;
+    } else {
+      top = blockRect.top - tipH - 2;
+    }
+
+    // Horizontal: interpolate anchor from left edge (col=0) to right edge (col=COLS-1)
+    // At col=0: tooltip left edge aligns with block left edge (touches left boundary)
+    // At col=COLS-1: tooltip right edge aligns with block right edge (touches right boundary)
+    // In between: linearly interpolate the anchor point across the tooltip width
+    const t = (COLS <= 1) ? 0 : col / (COLS - 1); // 0..1
+    // anchorX is the x position within the tooltip that aligns to the block center
+    // at t=0: anchorX=0 (left edge of tooltip at block center)
+    // at t=1: anchorX=tipW (right edge of tooltip at block center)
+    const blockCenterX = blockRect.left + blockRect.width / 2;
+    const anchorX = t * tipW;
+    let left = blockCenterX - anchorX;
+
+    // Clamp so tooltip stays within the map horizontally
+    left = Math.max(mapRect.left, Math.min(left, mapRect.right - tipW));
+
+    tooltip.style.left = left + 'px';
+    tooltip.style.top = top + 'px';
+  });
+
+  document.getElementById('disk-map').addEventListener('mouseout', e => {
+    if (!e.relatedTarget || !e.relatedTarget.closest('[data-block]')) {
+      tooltip.style.display = 'none';
+    }
+  });
+})();
 
 // ==========================================
 // MANUAL FS OPS
