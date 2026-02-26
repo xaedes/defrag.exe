@@ -556,22 +556,21 @@ function addWriteHead() {
   log(`Write head #${writeHeads.length} installed`, 'action');
 }
 
-// Distance from head's current position to a block index
-function headDistTo(head, blockIdx) {
-  const t = blockToXY(blockIdx);
+// Distance from head's current position to a given block index
+function headDistTo(head, targetBlockIdx) {
+  const t = blockToXY(targetBlockIdx);
   const dx = head.x - t.x;
   const dy = head.y - t.y;
   return Math.sqrt(dx*dx + dy*dy);
 }
 
-// Acquire the closest free head from a pool (blocks until one is available)
-async function acquireHead(pool) {
+// Acquire the closest free head from a pool to the given target block (blocks until one is available)
+async function acquireHead(pool, targetBlockIdx) {
   while (true) {
-    // Find closest free head
     let best = null, bestDist = Infinity;
     for (const h of pool) {
       if (!h.inUse) {
-        const d = headDistTo(h, h.targetBlock);
+        const d = headDistTo(h, targetBlockIdx);
         if (d < bestDist) { bestDist = d; best = h; }
       }
     }
@@ -642,13 +641,13 @@ function updateHeadVisual(head, newVisBlock) {
 // High-level helpers: acquire closest free head, move it, return it locked.
 // Caller must releaseHead() when done with the operation.
 async function acquireAndMoveReadHead(blockIdx) {
-  const head = await acquireHead(readHeads);
+  const head = await acquireHead(readHeads, blockIdx);
   await moveHeadTo(head, blockIdx);
   return head;
 }
 
 async function acquireAndMoveWriteHead(blockIdx) {
-  const head = await acquireHead(writeHeads);
+  const head = await acquireHead(writeHeads, blockIdx);
   await moveHeadTo(head, blockIdx);
   return head;
 }
