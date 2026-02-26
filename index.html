@@ -847,7 +847,8 @@ const SOFTWARE_CATALOG = [
       { op: 'compare', cmp: 'lt' },   // stack: [crunch_log.size < 128]
       { op: 'if' },                    // if true (size < 128): skip next op (exit), so we do truncate
       { op: 'exit' },                  // size is fine, bail out early
-      { op: 'truncate', file: 'crunch_log', offset: 0 },  // free all blocks from start → truncate to empty
+      { op: 'truncate', file: 'crunch_log', offset: 0, size: -1 },  // free all blocks → truncate to empty; pushes freed count
+      { op: 'pop' },  // discard freed count, not needed here
     ],
   },
   {
@@ -901,6 +902,58 @@ const SOFTWARE_CATALOG = [
       { op: 'delete', file: null, which: 'NODE_A.TMP' },
       { op: 'delete', file: null, which: 'NODE_B.TMP' },
       { op: 'delete', file: null, which: 'NODE_C.TMP' },
+    ],
+  },
+  {
+    id: 'sw_scavenger',
+    name: 'SCAVNGR.EXE',
+    desc: 'Scavenges disk space by fragmenting tmps into a rolling buffer, then reclaims random chunks. Earns per block reclaimed.',
+    badgeType: 'server',
+    price: 500,
+    ramReq: 512,
+    isServer: true,
+    persistentFiles: [
+      { key: 'scav_buf', name: 'SCAV.BUF', size: 10 },
+      { key: 'scav_idx', name: 'SCAV.IDX', size: 4 },
+    ],
+    ops: [
+      // Create a handful of tmps to fragment the disk
+      { op: 'create', file: null, name: 'SCAV_A.TMP', size: 7 },
+      { op: 'create', file: null, name: 'SCAV_B.TMP', size: 5 },
+      { op: 'create', file: null, name: 'SCAV_C.TMP', size: 9 },
+      // Append a fixed chunk to the rolling buffer each cycle
+      { op: 'append', file: 'scav_buf', size: 6 },
+      // Read the whole buffer to "process" it
+      { op: 'read', file: 'scav_buf', offset: 0, size: -1 },
+      // Check if buffer has grown past threshold (60 blocks)
+      { op: 'push_size', file: 'scav_buf' },
+      { op: 'push', value: 60 },
+      { op: 'compare', cmp: 'lt' },  // size < 60?
+      { op: 'if' },                  // true (small): skip exit → jump to truncate section
+      { op: 'exit' },                // buffer is fine, bail early
+      // truncate pops offset first (top), then size — so push size first, then offset
+      { op: 'push_size', file: 'scav_buf' },  // [total]
+      { op: 'push', value: 4 },
+      { op: 'calc', op2: 'div' },             // [total/4]  ← this becomes the size to reclaim
+      { op: 'push_random', min: 0.5, max: 1.5 },
+      { op: 'calc', op2: 'mul' },             // [rand_size ≈ total/8..total/3]  ← SIZE (pushed first = under)
+      { op: 'push_size', file: 'scav_buf' },  // [rand_size, total]
+      { op: 'push', value: 2 },
+      { op: 'calc', op2: 'div' },             // [rand_size, total/2]
+      { op: 'push_random', min: 0, max: 1 },  // [rand_size, total/2, rand 0..1]
+      { op: 'calc', op2: 'mul' },             // [rand_size, offset ≈ 0..total/2]  ← OFFSET (pushed last = top)
+      // truncate pops offset (top), then size (under); pushes freed_count
+      { op: 'truncate', file: 'scav_buf' },
+      // Earn $1.50 per reclaimed block
+      { op: 'push', value: 1.50 },
+      { op: 'calc', op2: 'mul' },
+      { op: 'earn' },
+      // Update index to log the reclaim event
+      { op: 'append', file: 'scav_idx', size: 1 },
+      // Clean up tmps
+      { op: 'delete', file: null, which: 'SCAV_A.TMP' },
+      { op: 'delete', file: null, which: 'SCAV_B.TMP' },
+      { op: 'delete', file: null, which: 'SCAV_C.TMP' },
     ],
   },
 ];
@@ -1235,16 +1288,35 @@ async function executeSoftwareOp(sw, inst, op) {
       const tf = files[fid];
       const tlen = tf.blocks.length;
 
-      const rawOffset = op.offset != null ? op.offset : 0;
+      // offset: op arg takes priority, else pop from stack
+      let rawOffset;
+      if (op.offset != null) {
+        rawOffset = op.offset;
+      } else {
+        if (inst.stack.length === 0) throw new Error('truncate: stack underflow (offset)');
+        rawOffset = inst.stack.pop();
+      }
+
+      // size: op arg takes priority, else pop from stack; null/undefined means "rest of file"
+      let rawSize;
+      if (op.size != null) {
+        rawSize = op.size;
+      } else if (op.size === null) {
+        rawSize = null; // explicitly omitted — free to end
+      } else {
+        if (inst.stack.length === 0) throw new Error('truncate: stack underflow (size)');
+        rawSize = inst.stack.pop();
+      }
+
       const offset = rawOffset < 0 ? Math.max(0, tlen + rawOffset) : Math.min(rawOffset, tlen);
 
       let count;
-      if (op.size == null) {
+      if (rawSize == null) {
         count = tlen - offset;
-      } else if (op.size < 0) {
-        count = Math.max(0, (tlen - offset) + op.size + 1);
+      } else if (rawSize < 0) {
+        count = Math.max(0, (tlen - offset) + rawSize + 1);
       } else {
-        count = Math.min(op.size, tlen - offset);
+        count = Math.min(rawSize, tlen - offset);
       }
 
       // Free the blocks in the range, moving write head to each
@@ -1259,6 +1331,8 @@ async function executeSoftwareOp(sw, inst, op) {
       tf.blocks.splice(offset, count);
       tf.size = tf.blocks.length;
       tf.modified = Date.now();
+      // Push number of freed blocks so caller can use it (e.g. for earn)
+      inst.stack.push(count);
       break;
     }
     case 'push': {
