@@ -1406,6 +1406,11 @@ async function runDefrag(mode, speed) {
         for (let i = DISK_SIZE - 1; i >= 0; i--) { if (disk[i] === null) { park = i; break; } }
         if (park !== -1) {
           const displaced = disk[targetPos];
+          // Read the displaced block from targetPos, write it to park
+          await moveReadHead(targetPos);
+          flashBlock(targetPos, 'defrag-read');
+          await moveWriteHead(park);
+          flashBlock(park, 'defrag-write');
           disk[park] = displaced;
           disk[targetPos] = null;
           const f = files[displaced];
