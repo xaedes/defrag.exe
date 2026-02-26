@@ -605,7 +605,9 @@ function moveHeadTo(head, blockIdx) {
       const dx = target.x - head.x;
       const dy = target.y - head.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-
+      if (isNaN(dist)) {
+        throw new Error('');
+      }
       if (dist <= HEAD_SNAP) {
         head.x = target.x;
         head.y = target.y;
