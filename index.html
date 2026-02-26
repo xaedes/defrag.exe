@@ -1302,6 +1302,65 @@ async function runSoftware(swId) {
   render();
 }
 
+// Resolve a (rawOffset, rawSize) pair against a file of `len` blocks into
+// a concrete [offset, count] slice.  Used by readFileFid and truncateFileFid.
+function resolveRange(len, rawOffset, rawSize) {
+  const offset = rawOffset < 0
+    ? Math.max(0, len + Math.round(rawOffset))
+    : Math.min(Math.round(rawOffset), len);
+  let count;
+  if (rawSize == null) {
+    count = len - offset;
+  } else if (rawSize < 0) {
+    count = Math.max(0, (len - offset) + Math.round(rawSize) + 1);
+  } else {
+    count = Math.min(Math.round(rawSize), len - offset);
+  }
+  return { offset, count };
+}
+
+// Seek the read head across a contiguous range of a file's blocks.
+async function readFileFid(fid, rawOffset, rawSize) {
+  const f = files[fid];
+  if (!f || f.blocks.length === 0) return;
+  const { offset, count } = resolveRange(f.blocks.length, rawOffset ?? 0, rawSize ?? null);
+  for (let i = 0; i < count; i++) {
+    await readBlock(f.blocks[offset + i]);
+  }
+}
+
+// Write-head sweep over blocks [prevLen .. end] of a file (newly allocated blocks).
+async function writeNewBlocks(fid, prevLen) {
+  const f = files[fid];
+  for (let i = prevLen; i < f.blocks.length; i++) {
+    await writeBlock(f.blocks[i]);
+  }
+}
+
+// Grow a file by `size` blocks and sweep the write head across the new blocks.
+async function appendFileAndWrite(fid, size) {
+  const prevLen = files[fid].blocks.length;
+  if (!appendFile(fid, size)) throw new Error('disk full during append');
+  await writeNewBlocks(fid, prevLen);
+}
+
+// Free a range of a file's blocks (write head to each, then splice from block list).
+// Returns the number of freed blocks.
+async function truncateFileFid(fid, rawOffset, rawSize) {
+  const f = files[fid];
+  const { offset, count } = resolveRange(f.blocks.length, rawOffset, rawSize);
+  for (let ti = offset; ti < offset + count; ti++) {
+    const blockIdx = f.blocks[ti];
+    if (blockIdx === undefined) continue;
+    await writeBlock(blockIdx);
+    disk[blockIdx] = null;
+  }
+  f.blocks.splice(offset, count);
+  f.size = f.blocks.length;
+  f.modified = Date.now();
+  return count;
+}
+
 async function executeSoftwareOp(sw, inst, op) {
   switch(op.op) {
     case 'read': {
@@ -1314,25 +1373,7 @@ async function executeSoftwareOp(sw, inst, op) {
         fid = inst.tmpFiles[keys[keys.length - 1]];
       }
       if (!files[fid]) throw new Error(`file ${op.file || '(tmp)'} missing`);
-      const f = files[fid];
-      const len = f.blocks.length;
-      if (len === 0) break;
-
-      const rawOffset = op.offset != null ? op.offset : 0;
-      const offset = rawOffset < 0 ? Math.max(0, len + rawOffset) : Math.min(rawOffset, len - 1);
-
-      let count;
-      if (op.size == null) {
-        count = len - offset;
-      } else if (op.size < 0) {
-        count = Math.max(0, (len - offset) + op.size + 1);
-      } else {
-        count = Math.min(op.size, len - offset);
-      }
-
-      for (let i = 0; i < count; i++) {
-        await readBlock(f.blocks[offset + i]);
-      }
+      await readFileFid(fid, op.offset, op.size);
       break;
     }
     case 'create': {
@@ -1340,12 +1381,8 @@ async function executeSoftwareOp(sw, inst, op) {
       const size = op.size || 4;
       const fid = allocateFile(name, size, { silent: true, swId: sw.id });
       if (fid === null) throw new Error('disk full');
-      const key = op.which || name;
-      inst.tmpFiles[key] = fid;
-      const f = files[fid];
-      for (const blockIdx of f.blocks) {
-        await writeBlock(blockIdx);
-      }
+      inst.tmpFiles[op.which || name] = fid;
+      await writeNewBlocks(fid, 0);
       break;
     }
     case 'append': {
@@ -1358,13 +1395,7 @@ async function executeSoftwareOp(sw, inst, op) {
         fid = inst.tmpFiles[keys[keys.length - 1]];
       }
       if (!files[fid]) throw new Error('target file missing');
-      const prevLen = files[fid].blocks.length;
-      const ok = appendFile(fid, op.size || 2);
-      if (!ok) throw new Error('disk full during append');
-      const f = files[fid];
-      for (let i = prevLen; i < f.blocks.length; i++) {
-        await writeBlock(f.blocks[i]);
-      }
+      await appendFileAndWrite(fid, op.size || 2);
       break;
     }
     case 'delete': {
@@ -1384,9 +1415,7 @@ async function executeSoftwareOp(sw, inst, op) {
         const keyEntry = Object.entries(inst.tmpFiles).find(([k, v]) => v === fid);
         if (keyEntry) delete inst.tmpFiles[keyEntry[0]];
         const f = files[fid];
-        if (f && f.blocks.length > 0) {
-          await writeBlock(f.blocks[0]);
-        }
+        if (f && f.blocks.length > 0) await writeBlock(f.blocks[0]);
         deleteFile(fid);
       }
       break;
@@ -1401,8 +1430,6 @@ async function executeSoftwareOp(sw, inst, op) {
         fid = inst.tmpFiles[keys[keys.length - 1]];
       }
       if (!files[fid]) throw new Error(`truncate: file ${op.file || '(tmp)'} missing`);
-      const tf = files[fid];
-      const tlen = tf.blocks.length;
 
       // offset: op arg takes priority, else pop from stack
       let rawOffset;
@@ -1413,41 +1440,18 @@ async function executeSoftwareOp(sw, inst, op) {
         rawOffset = inst.stack.pop();
       }
 
-      // size: op arg takes priority, else pop from stack; null/undefined means "rest of file"
+      // size: op arg takes priority, null means "rest of file", else pop from stack
       let rawSize;
       if (op.size != null) {
         rawSize = op.size;
       } else if (op.size === null) {
-        rawSize = null; // explicitly omitted — free to end
+        rawSize = null;
       } else {
         if (inst.stack.length === 0) throw new Error('truncate: stack underflow (size)');
         rawSize = inst.stack.pop();
       }
 
-      const offset = Math.round(rawOffset < 0 ? Math.max(0, tlen + rawOffset) : Math.min(rawOffset, tlen));
-
-      let count;
-      if (rawSize == null) {
-        count = tlen - offset;
-      } else if (rawSize < 0) {
-        count = Math.max(0, (tlen - offset) + Math.round(rawSize) + 1);
-      } else {
-        count = Math.min(Math.round(rawSize), tlen - offset);
-      }
-
-      // Free the blocks in the range, moving write head to each
-      for (let ti = offset; ti < offset + count; ti++) {
-        const blockIdx = tf.blocks[ti];
-        if (blockIdx === undefined) continue;
-        await writeBlock(blockIdx);
-        disk[blockIdx] = null;
-      }
-      // Splice them out of the file's block list
-      tf.blocks.splice(offset, count);
-      tf.size = tf.blocks.length;
-      tf.modified = Date.now();
-      // Push number of freed blocks so caller can use it (e.g. for earn)
-      inst.stack.push(count);
+      inst.stack.push(await truncateFileFid(fid, rawOffset, rawSize));
       break;
     }
     case 'push': {
