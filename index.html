@@ -1050,13 +1050,15 @@ async function runSoftware(swId) {
     stepIndex: 0,
     progress: 0,
     tmpFiles: {},
+    stack: [],
   };
   swInstances[swId].push(inst);
   log(`${sw.name} #${inst.id}: starting...`, 'action');
   render();
 
   do {
-    for (let i = 0; i < sw.ops.length; i++) {
+    let i = 0;
+    while (i < sw.ops.length) {
       if (!inst.running || inst.stopRequested) break;
       const op = sw.ops[i];
       inst.stepIndex = i;
@@ -1064,15 +1066,15 @@ async function runSoftware(swId) {
       renderSoftwareCard(swId);
       await sleep(80);
 
+      let signal;
       try {
-        await executeSoftwareOp(sw, inst, op);
+        signal = await executeSoftwareOp(sw, inst, op);
       } catch(e) {
         log(`${sw.name} #${inst.id}: CRASH — ${e.message}`, 'crash');
         inst.running = false;
         inst.crashed = true;
         for (const k of Object.keys(inst.tmpFiles)) { if (inst.tmpFiles[k]) deleteFile(inst.tmpFiles[k]); }
         inst.tmpFiles = {};
-        // Remove crashed instance after a short display pause
         setTimeout(() => {
           const arr = swInstances[swId];
           if (arr) { const idx = arr.indexOf(inst); if (idx !== -1) arr.splice(idx, 1); }
@@ -1084,6 +1086,13 @@ async function runSoftware(swId) {
 
       render();
       await sleep(50);
+
+      if (signal === 'exit') break;
+      if (signal === 'skip') {
+        i += 2; // skip next op
+      } else {
+        i++;
+      }
     }
 
     if (inst.stopRequested) break;
@@ -1108,16 +1117,16 @@ async function runSoftware(swId) {
   render();
 }
 
-async function executeSoftwareOp(sw, rt, op) {
+async function executeSoftwareOp(sw, inst, op) {
   switch(op.op) {
     case 'read': {
       let fid;
       if (op.file) {
         fid = sw.persistentFileIds[op.file];
       } else {
-        const keys = Object.keys(rt.tmpFiles);
+        const keys = Object.keys(inst.tmpFiles);
         if (keys.length === 0) throw new Error('no file to read');
-        fid = rt.tmpFiles[keys[keys.length - 1]];
+        fid = inst.tmpFiles[keys[keys.length - 1]];
       }
       if (!files[fid]) throw new Error(`file ${op.file || '(tmp)'} missing`);
       const f = files[fid];
@@ -1150,7 +1159,7 @@ async function executeSoftwareOp(sw, rt, op) {
       const fid = allocateFile(name, size, { silent: true, swId: sw.id });
       if (fid === null) throw new Error('disk full');
       const key = op.which || name;
-      rt.tmpFiles[key] = fid;
+      inst.tmpFiles[key] = fid;
       const f = files[fid];
       for (const blockIdx of f.blocks) {
         const head = await acquireAndMoveWriteHead(blockIdx);
@@ -1164,9 +1173,9 @@ async function executeSoftwareOp(sw, rt, op) {
       if (op.file) {
         fid = sw.persistentFileIds[op.file];
       } else {
-        const keys = Object.keys(rt.tmpFiles);
+        const keys = Object.keys(inst.tmpFiles);
         if (keys.length === 0) throw new Error('no tmp file to append');
-        fid = rt.tmpFiles[keys[keys.length - 1]];
+        fid = inst.tmpFiles[keys[keys.length - 1]];
       }
       if (!files[fid]) throw new Error('target file missing');
       const prevLen = files[fid].blocks.length;
@@ -1183,19 +1192,19 @@ async function executeSoftwareOp(sw, rt, op) {
     case 'delete': {
       let fid;
       if (op.which) {
-        fid = rt.tmpFiles[op.which];
+        fid = inst.tmpFiles[op.which];
       } else if (op.file) {
         fid = sw.persistentFileIds[op.file];
       } else {
-        const keys = Object.keys(rt.tmpFiles);
+        const keys = Object.keys(inst.tmpFiles);
         if (keys.length === 0) return;
         const k = keys[keys.length - 1];
-        fid = rt.tmpFiles[k];
-        delete rt.tmpFiles[k];
+        fid = inst.tmpFiles[k];
+        delete inst.tmpFiles[k];
       }
       if (fid && files[fid]) {
-        const keyEntry = Object.entries(rt.tmpFiles).find(([k, v]) => v === fid);
-        if (keyEntry) delete rt.tmpFiles[keyEntry[0]];
+        const keyEntry = Object.entries(inst.tmpFiles).find(([k, v]) => v === fid);
+        if (keyEntry) delete inst.tmpFiles[keyEntry[0]];
         const f = files[fid];
         if (f && f.blocks.length > 0) {
           const head = await acquireAndMoveWriteHead(f.blocks[0]);
@@ -1206,8 +1215,77 @@ async function executeSoftwareOp(sw, rt, op) {
       }
       break;
     }
+    case 'push': {
+      inst.stack.push(op.value);
+      break;
+    }
+    case 'push_size': {
+      let fid;
+      if (op.file) {
+        fid = sw.persistentFileIds[op.file];
+      } else {
+        const keys = Object.keys(inst.tmpFiles);
+        if (keys.length === 0) throw new Error('push_size: no file to measure');
+        fid = inst.tmpFiles[keys[keys.length - 1]];
+      }
+      if (!files[fid]) throw new Error(`push_size: file ${op.file || '(tmp)'} missing`);
+      inst.stack.push(files[fid].blocks.length);
+      break;
+    }
+    case 'push_random': {
+      const lo = op.min != null ? op.min : 0;
+      const hi = op.max != null ? op.max : 1;
+      inst.stack.push(lo + Math.random() * (hi - lo));
+      break;
+    }
+    case 'dup': {
+      if (inst.stack.length === 0) throw new Error('dup: stack underflow');
+      const top = inst.stack[inst.stack.length - 1];
+      inst.stack.push(top);
+      break;
+    }
+    case 'pop': {
+      if (inst.stack.length === 0) throw new Error('pop: stack underflow');
+      inst.stack.pop();
+      break;
+    }
+    case 'exit': {
+      return 'exit';
+    }
+    case 'crash': {
+      throw new Error(op.message || 'forced crash');
+    }
+    case 'compare': {
+      if (inst.stack.length < 2) throw new Error('compare: stack underflow');
+      const b = inst.stack.pop();
+      const a = inst.stack.pop();
+      const cmp = op.cmp || 'eq';
+      let result;
+      if      (cmp === 'eq')  result = a === b;
+      else if (cmp === 'neq') result = a !== b;
+      else if (cmp === 'lt')  result = a < b;
+      else if (cmp === 'lte') result = a <= b;
+      else if (cmp === 'gt')  result = a > b;
+      else if (cmp === 'gte') result = a >= b;
+      else throw new Error(`compare: unknown cmp '${cmp}'`);
+      inst.stack.push(result ? 1 : 0);
+      break;
+    }
+    case 'if': {
+      if (inst.stack.length === 0) throw new Error('if: stack underflow');
+      const val = inst.stack.pop();
+      if (!val) return 'skip';
+      break;
+    }
     case 'earn': {
-      earnMoney(op.amount, sw.name);
+      let amount;
+      if (op.amount != null) {
+        amount = op.amount;
+      } else {
+        if (inst.stack.length === 0) throw new Error('earn: stack underflow (no amount)');
+        amount = inst.stack.pop();
+      }
+      earnMoney(amount, sw.name);
       break;
     }
   }
