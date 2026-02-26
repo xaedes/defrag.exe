@@ -1344,6 +1344,13 @@ async function appendFileAndWrite(fid, size) {
   await writeNewBlocks(fid, prevLen);
 }
 
+// Signal a file deletion by touching its first block with the write head, then free it.
+async function deleteFileAndWrite(fid) {
+  const f = files[fid];
+  if (f && f.blocks.length > 0) await writeBlock(f.blocks[0]);
+  deleteFile(fid);
+}
+
 // Free a range of a file's blocks (write head to each, then splice from block list).
 // Returns the number of freed blocks.
 async function truncateFileFid(fid, rawOffset, rawSize) {
@@ -1414,9 +1421,7 @@ async function executeSoftwareOp(sw, inst, op) {
       if (fid && files[fid]) {
         const keyEntry = Object.entries(inst.tmpFiles).find(([k, v]) => v === fid);
         if (keyEntry) delete inst.tmpFiles[keyEntry[0]];
-        const f = files[fid];
-        if (f && f.blocks.length > 0) await writeBlock(f.blocks[0]);
-        deleteFile(fid);
+        await deleteFileAndWrite(fid);
       }
       break;
     }
