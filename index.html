@@ -1301,6 +1301,23 @@ async function executeSoftwareOp(sw, inst, op) {
     case 'crash': {
       throw new Error(op.message || 'forced crash');
     }
+    case 'calc': {
+      if (inst.stack.length < 2) throw new Error('calc: stack underflow');
+      const b = inst.stack.pop();
+      const a = inst.stack.pop();
+      const op2 = op.op2 || 'add';
+      let result;
+      if      (op2 === 'add') result = a + b;
+      else if (op2 === 'sub') result = a - b;
+      else if (op2 === 'mul') result = a * b;
+      else if (op2 === 'div') {
+        if (b === 0) throw new Error('calc: division by zero');
+        result = a / b;
+      }
+      else throw new Error(`calc: unknown op '${op2}'`);
+      inst.stack.push(result);
+      break;
+    }
     case 'compare': {
       if (inst.stack.length < 2) throw new Error('compare: stack underflow');
       const b = inst.stack.pop();
@@ -1331,6 +1348,7 @@ async function executeSoftwareOp(sw, inst, op) {
         if (inst.stack.length === 0) throw new Error('earn: stack underflow (no amount)');
         amount = inst.stack.pop();
       }
+      amount = Math.round(amount * 100) / 100;
       earnMoney(amount, sw.name);
       break;
     }
