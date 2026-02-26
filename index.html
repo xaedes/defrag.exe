@@ -1123,20 +1123,17 @@ async function runDefrag(mode, speed) {
       if (sourcePos === -1) for (let i = 0; i < DISK_SIZE; i++) { if (disk[i] === wantedId) { sourcePos = i; break; } }
       if (sourcePos === -1) continue;
 
-      // Move read head to source, wait for arrival
-      await moveReadHead(sourcePos);
-      flashBlock(sourcePos, 'defrag-read');
+      // Read from source
+      await readBlock(sourcePos);
 
       if (disk[targetPos] !== null) {
         let park = -1;
         for (let i = DISK_SIZE - 1; i >= 0; i--) { if (disk[i] === null) { park = i; break; } }
         if (park !== -1) {
           const displaced = disk[targetPos];
-          // Read the displaced block from targetPos, write it to park
-          await moveReadHead(targetPos);
-          flashBlock(targetPos, 'defrag-read');
-          await moveWriteHead(park);
-          flashBlock(park, 'defrag-write');
+          // Displace the block at targetPos out to a free parking spot
+          await readBlock(targetPos);
+          await writeBlock(park);
           disk[park] = displaced;
           disk[targetPos] = null;
           const f = files[displaced];
@@ -1149,9 +1146,8 @@ async function runDefrag(mode, speed) {
       const f = files[wantedId];
       if (f) { const bi = f.blocks.indexOf(sourcePos); if (bi !== -1) f.blocks[bi] = targetPos; }
 
-      // Move write head to target, wait for arrival
-      await moveWriteHead(targetPos);
-      flashBlock(targetPos, 'defrag-write');
+      // Write to target
+      await writeBlock(targetPos);
       moves++;
       const pct = Math.min(99, Math.round((targetPos / DISK_SIZE) * 100));
       document.getElementById('defrag-progress').style.width = pct + '%';
@@ -1166,6 +1162,20 @@ async function runDefrag(mode, speed) {
 function flashBlock(pos, cls) {
   const el = document.querySelector(`[data-block="${pos}"]`);
   if (el) { el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 150); }
+}
+
+// High-level block I/O — acquire the closest free head, move it to the block,
+// flash the access animation, then release the head.
+async function readBlock(blockIdx) {
+  const head = await acquireAndMoveReadHead(blockIdx);
+  flashBlock(blockIdx, 'defrag-read');
+  releaseHead(head);
+}
+
+async function writeBlock(blockIdx) {
+  const head = await acquireAndMoveWriteHead(blockIdx);
+  flashBlock(blockIdx, 'defrag-write');
+  releaseHead(head);
 }
 
 // ==========================================
@@ -1326,10 +1336,7 @@ async function executeSoftwareOp(sw, inst, op) {
       }
 
       for (let i = 0; i < count; i++) {
-        const blockIdx = f.blocks[offset + i];
-        const head = await acquireAndMoveReadHead(blockIdx);
-        flashBlock(blockIdx, 'defrag-read');
-        releaseHead(head);
+        await readBlock(f.blocks[offset + i]);
       }
       break;
     }
@@ -1342,9 +1349,7 @@ async function executeSoftwareOp(sw, inst, op) {
       inst.tmpFiles[key] = fid;
       const f = files[fid];
       for (const blockIdx of f.blocks) {
-        const head = await acquireAndMoveWriteHead(blockIdx);
-        flashBlock(blockIdx, 'defrag-write');
-        releaseHead(head);
+        await writeBlock(blockIdx);
       }
       break;
     }
@@ -1363,9 +1368,7 @@ async function executeSoftwareOp(sw, inst, op) {
       if (!ok) throw new Error('disk full during append');
       const f = files[fid];
       for (let i = prevLen; i < f.blocks.length; i++) {
-        const head = await acquireAndMoveWriteHead(f.blocks[i]);
-        flashBlock(f.blocks[i], 'defrag-write');
-        releaseHead(head);
+        await writeBlock(f.blocks[i]);
       }
       break;
     }
@@ -1387,9 +1390,7 @@ async function executeSoftwareOp(sw, inst, op) {
         if (keyEntry) delete inst.tmpFiles[keyEntry[0]];
         const f = files[fid];
         if (f && f.blocks.length > 0) {
-          const head = await acquireAndMoveWriteHead(f.blocks[0]);
-          flashBlock(f.blocks[0], 'defrag-write');
-          releaseHead(head);
+          await writeBlock(f.blocks[0]);
         }
         deleteFile(fid);
       }
@@ -1442,13 +1443,9 @@ async function executeSoftwareOp(sw, inst, op) {
       // Free the blocks in the range, moving write head to each
       for (let ti = offset; ti < offset + count; ti++) {
         const blockIdx = tf.blocks[ti];
-        if (blockIdx === undefined) {
-          continue;
-        }
-        const head = await acquireAndMoveWriteHead(blockIdx);
-        flashBlock(blockIdx, 'defrag-write');
+        if (blockIdx === undefined) continue;
+        await writeBlock(blockIdx);
         disk[blockIdx] = null;
-        releaseHead(head);
       }
       // Splice them out of the file's block list
       tf.blocks.splice(offset, count);
@@ -2135,17 +2132,13 @@ async function runChkdsk() {
     // Only care about blocks that have a file id but the file doesn't exist
     if (id !== null && id !== 0 && !files[id]) {
       // Corrupt block — read it (so user sees the head travel)
-      const rHead = await acquireAndMoveReadHead(i);
-      flashBlock(i, 'defrag-read');
-      releaseHead(rHead);
+      await readBlock(i);
 
       if (chkdskStopRequested) { disk[i] = null; corrupted++; render(); break; }
 
       // Write-clear it
-      const wHead = await acquireAndMoveWriteHead(i);
-      flashBlock(i, 'defrag-write');
+      await writeBlock(i);
       disk[i] = null;
-      releaseHead(wHead);
 
       corrupted++;
       render();
