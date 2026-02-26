@@ -1050,6 +1050,124 @@ function getFragmentation() {
   return Math.min(100, Math.round((totalFragments / Math.max(1, used)) * 200));
 }
 
+
+// ==========================================
+// DEFRAG ENGINE
+// ==========================================
+async function startDefrag() {
+  if (defragRunning) return;
+  defragRunning = true;
+  document.getElementById('btn-defrag').disabled = true;
+  document.getElementById('btn-stop').disabled = false;
+  document.getElementById('defrag-status').textContent = 'ANALYZING...';
+  const mode = document.getElementById('defrag-mode').value;
+  const speed = parseInt(document.getElementById('defrag-speed').value);
+  log(`Starting DEFRAG — Mode: ${mode.toUpperCase()}`, 'defrag');
+  await sleep(400);
+  await runDefrag(mode, speed);
+  if (defragRunning) {
+    document.getElementById('defrag-status').textContent = 'DEFRAG COMPLETE ✓';
+    document.getElementById('defrag-progress').style.width = '100%';
+    log('Defragmentation complete!', 'defrag');
+  }
+  defragRunning = false;
+  document.getElementById('btn-defrag').disabled = false;
+  document.getElementById('btn-stop').disabled = true;
+  render();
+}
+
+function stopDefrag() {
+  defragRunning = false;
+  document.getElementById('defrag-status').textContent = 'STOPPED';
+  document.getElementById('btn-defrag').disabled = false;
+  document.getElementById('btn-stop').disabled = true;
+  log('Defrag stopped by user', 'warn');
+}
+
+async function runDefrag(mode, speed) {
+  let fileOrder = Object.keys(files).map(Number).filter(id => id >= 0);
+  if (mode === 'simple' || mode === 'consolidate') {
+    fileOrder.sort((a,b) => {
+      if (a===0) return -1; if (b===0) return 1;
+      return Math.min(...files[a].blocks) - Math.min(...files[b].blocks);
+    });
+  } else if (mode === 'byname') {
+    fileOrder.sort((a,b) => { if (a===0) return -1; if (b===0) return 1; return files[a].name.localeCompare(files[b].name); });
+  } else if (mode === 'bydate') {
+    fileOrder.sort((a,b) => { if (a===0) return -1; if (b===0) return 1; return files[a].modified - files[b].modified; });
+  } else if (mode === 'bysize') {
+    fileOrder.sort((a,b) => { if (a===0) return -1; if (b===0) return 1; return files[b].size - files[a].size; });
+  }
+
+  let ideal = new Array(DISK_SIZE).fill(null);
+  let cursor = 0;
+  for (const id of fileOrder) {
+    if (!files[id]) continue;
+    const size = files[id].blocks.length;
+    if (cursor + size > DISK_SIZE) break;
+    for (let i = 0; i < size; i++) ideal[cursor + i] = id;
+    cursor += size;
+  }
+
+  let moves = 0;
+  for (let targetPos = 0; targetPos < DISK_SIZE; targetPos++) {
+    if (!defragRunning) return;
+    const wantedId = ideal[targetPos];
+    if (disk[targetPos] === wantedId) continue;
+
+    if (wantedId !== null) {
+      let sourcePos = -1;
+      for (let i = 0; i < DISK_SIZE; i++) {
+        if (disk[i] === wantedId && ideal[i] !== wantedId) { sourcePos = i; break; }
+      }
+      if (sourcePos === -1) for (let i = 0; i < DISK_SIZE; i++) { if (disk[i] === wantedId) { sourcePos = i; break; } }
+      if (sourcePos === -1) continue;
+
+      // Move read head to source, wait for arrival
+      await moveReadHead(sourcePos);
+      flashBlock(sourcePos, 'defrag-read');
+
+      if (disk[targetPos] !== null) {
+        let park = -1;
+        for (let i = DISK_SIZE - 1; i >= 0; i--) { if (disk[i] === null) { park = i; break; } }
+        if (park !== -1) {
+          const displaced = disk[targetPos];
+          // Read the displaced block from targetPos, write it to park
+          await moveReadHead(targetPos);
+          flashBlock(targetPos, 'defrag-read');
+          await moveWriteHead(park);
+          flashBlock(park, 'defrag-write');
+          disk[park] = displaced;
+          disk[targetPos] = null;
+          const f = files[displaced];
+          if (f) { const bi = f.blocks.indexOf(targetPos); if (bi !== -1) f.blocks[bi] = park; }
+        }
+      }
+
+      disk[targetPos] = wantedId;
+      disk[sourcePos] = null;
+      const f = files[wantedId];
+      if (f) { const bi = f.blocks.indexOf(sourcePos); if (bi !== -1) f.blocks[bi] = targetPos; }
+
+      // Move write head to target, wait for arrival
+      await moveWriteHead(targetPos);
+      flashBlock(targetPos, 'defrag-write');
+      moves++;
+      const pct = Math.min(99, Math.round((targetPos / DISK_SIZE) * 100));
+      document.getElementById('defrag-progress').style.width = pct + '%';
+      document.getElementById('defrag-status').textContent = `DEFRAGGING... ${pct}%  [${moves} MOVES]`;
+      if (moves % 3 === 0) { render(); await sleep(speed); }
+    }
+  }
+  render();
+}
+
+// Legacy flash (kept for brief visual pop after head arrives)
+function flashBlock(pos, cls) {
+  const el = document.querySelector(`[data-block="${pos}"]`);
+  if (el) { el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 150); }
+}
+
 // ==========================================
 // RAM TRACKING
 // ==========================================
@@ -1546,123 +1664,6 @@ function buySoftware(swId) {
   if (!spendMoney(swDef.price)) { log(`Not enough money for ${swDef.name}`, 'err'); return; }
   installSoftware(swDef);
   renderShop();
-}
-
-// ==========================================
-// DEFRAG ENGINE
-// ==========================================
-async function startDefrag() {
-  if (defragRunning) return;
-  defragRunning = true;
-  document.getElementById('btn-defrag').disabled = true;
-  document.getElementById('btn-stop').disabled = false;
-  document.getElementById('defrag-status').textContent = 'ANALYZING...';
-  const mode = document.getElementById('defrag-mode').value;
-  const speed = parseInt(document.getElementById('defrag-speed').value);
-  log(`Starting DEFRAG — Mode: ${mode.toUpperCase()}`, 'defrag');
-  await sleep(400);
-  await runDefrag(mode, speed);
-  if (defragRunning) {
-    document.getElementById('defrag-status').textContent = 'DEFRAG COMPLETE ✓';
-    document.getElementById('defrag-progress').style.width = '100%';
-    log('Defragmentation complete!', 'defrag');
-  }
-  defragRunning = false;
-  document.getElementById('btn-defrag').disabled = false;
-  document.getElementById('btn-stop').disabled = true;
-  render();
-}
-
-function stopDefrag() {
-  defragRunning = false;
-  document.getElementById('defrag-status').textContent = 'STOPPED';
-  document.getElementById('btn-defrag').disabled = false;
-  document.getElementById('btn-stop').disabled = true;
-  log('Defrag stopped by user', 'warn');
-}
-
-async function runDefrag(mode, speed) {
-  let fileOrder = Object.keys(files).map(Number).filter(id => id >= 0);
-  if (mode === 'simple' || mode === 'consolidate') {
-    fileOrder.sort((a,b) => {
-      if (a===0) return -1; if (b===0) return 1;
-      return Math.min(...files[a].blocks) - Math.min(...files[b].blocks);
-    });
-  } else if (mode === 'byname') {
-    fileOrder.sort((a,b) => { if (a===0) return -1; if (b===0) return 1; return files[a].name.localeCompare(files[b].name); });
-  } else if (mode === 'bydate') {
-    fileOrder.sort((a,b) => { if (a===0) return -1; if (b===0) return 1; return files[a].modified - files[b].modified; });
-  } else if (mode === 'bysize') {
-    fileOrder.sort((a,b) => { if (a===0) return -1; if (b===0) return 1; return files[b].size - files[a].size; });
-  }
-
-  let ideal = new Array(DISK_SIZE).fill(null);
-  let cursor = 0;
-  for (const id of fileOrder) {
-    if (!files[id]) continue;
-    const size = files[id].blocks.length;
-    if (cursor + size > DISK_SIZE) break;
-    for (let i = 0; i < size; i++) ideal[cursor + i] = id;
-    cursor += size;
-  }
-
-  let moves = 0;
-  for (let targetPos = 0; targetPos < DISK_SIZE; targetPos++) {
-    if (!defragRunning) return;
-    const wantedId = ideal[targetPos];
-    if (disk[targetPos] === wantedId) continue;
-
-    if (wantedId !== null) {
-      let sourcePos = -1;
-      for (let i = 0; i < DISK_SIZE; i++) {
-        if (disk[i] === wantedId && ideal[i] !== wantedId) { sourcePos = i; break; }
-      }
-      if (sourcePos === -1) for (let i = 0; i < DISK_SIZE; i++) { if (disk[i] === wantedId) { sourcePos = i; break; } }
-      if (sourcePos === -1) continue;
-
-      // Move read head to source, wait for arrival
-      await moveReadHead(sourcePos);
-      flashBlock(sourcePos, 'defrag-read');
-
-      if (disk[targetPos] !== null) {
-        let park = -1;
-        for (let i = DISK_SIZE - 1; i >= 0; i--) { if (disk[i] === null) { park = i; break; } }
-        if (park !== -1) {
-          const displaced = disk[targetPos];
-          // Read the displaced block from targetPos, write it to park
-          await moveReadHead(targetPos);
-          flashBlock(targetPos, 'defrag-read');
-          await moveWriteHead(park);
-          flashBlock(park, 'defrag-write');
-          disk[park] = displaced;
-          disk[targetPos] = null;
-          const f = files[displaced];
-          if (f) { const bi = f.blocks.indexOf(targetPos); if (bi !== -1) f.blocks[bi] = park; }
-        }
-      }
-
-      disk[targetPos] = wantedId;
-      disk[sourcePos] = null;
-      const f = files[wantedId];
-      if (f) { const bi = f.blocks.indexOf(sourcePos); if (bi !== -1) f.blocks[bi] = targetPos; }
-
-      // Move write head to target, wait for arrival
-      await moveWriteHead(targetPos);
-      flashBlock(targetPos, 'defrag-write');
-      moves++;
-      const pct = Math.min(99, Math.round((targetPos / DISK_SIZE) * 100));
-      document.getElementById('defrag-progress').style.width = pct + '%';
-      document.getElementById('defrag-status').textContent = `DEFRAGGING... ${pct}%  [${moves} MOVES]`;
-      if (moves % 3 === 0) { render(); await sleep(speed); }
-    }
-  }
-  render();
-}
-
-// Legacy flash (kept for brief visual pop after head arrives)
-function flashBlock(pos, cls) {
-  const el = document.querySelector(`[data-block="${pos}"]`);
-  if (el) { el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 150); }
 }
 
 // ==========================================
