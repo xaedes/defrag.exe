@@ -1215,6 +1215,45 @@ async function executeSoftwareOp(sw, inst, op) {
       }
       break;
     }
+    case 'truncate': {
+      let fid;
+      if (op.file) {
+        fid = sw.persistentFileIds[op.file];
+      } else {
+        const keys = Object.keys(inst.tmpFiles);
+        if (keys.length === 0) throw new Error('truncate: no file to truncate');
+        fid = inst.tmpFiles[keys[keys.length - 1]];
+      }
+      if (!files[fid]) throw new Error(`truncate: file ${op.file || '(tmp)'} missing`);
+      const tf = files[fid];
+      const tlen = tf.blocks.length;
+
+      const rawOffset = op.offset != null ? op.offset : 0;
+      const offset = rawOffset < 0 ? Math.max(0, tlen + rawOffset) : Math.min(rawOffset, tlen);
+
+      let count;
+      if (op.size == null) {
+        count = tlen - offset;
+      } else if (op.size < 0) {
+        count = Math.max(0, (tlen - offset) + op.size + 1);
+      } else {
+        count = Math.min(op.size, tlen - offset);
+      }
+
+      // Free the blocks in the range, moving write head to each
+      for (let ti = offset; ti < offset + count; ti++) {
+        const blockIdx = tf.blocks[ti];
+        const head = await acquireAndMoveWriteHead(blockIdx);
+        flashBlock(blockIdx, 'defrag-write');
+        disk[blockIdx] = null;
+        releaseHead(head);
+      }
+      // Splice them out of the file's block list
+      tf.blocks.splice(offset, count);
+      tf.size = tf.blocks.length;
+      tf.modified = Date.now();
+      break;
+    }
     case 'push': {
       inst.stack.push(op.value);
       break;
