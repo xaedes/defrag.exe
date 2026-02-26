@@ -573,7 +573,7 @@ async function acquireHead(pool, targetBlockIdx) {
     for (const h of pool) {
       if (!h.inUse) {
         const d = headDistTo(h, targetBlockIdx);
-        if (d < bestDist) { bestDist = d; best = h; }
+        if ((targetBlockIdx === undefined) || (d < bestDist)) { bestDist = d; best = h; }
       }
     }
     if (best) {
