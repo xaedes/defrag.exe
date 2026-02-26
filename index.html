@@ -1308,15 +1308,15 @@ async function executeSoftwareOp(sw, inst, op) {
         rawSize = inst.stack.pop();
       }
 
-      const offset = rawOffset < 0 ? Math.max(0, tlen + rawOffset) : Math.min(rawOffset, tlen);
+      const offset = Math.round(rawOffset < 0 ? Math.max(0, tlen + rawOffset) : Math.min(rawOffset, tlen));
 
       let count;
       if (rawSize == null) {
         count = tlen - offset;
       } else if (rawSize < 0) {
-        count = Math.max(0, (tlen - offset) + rawSize + 1);
+        count = Math.max(0, (tlen - offset) + Math.round(rawSize) + 1);
       } else {
-        count = Math.min(rawSize, tlen - offset);
+        count = Math.min(Math.round(rawSize), tlen - offset);
       }
 
       // Free the blocks in the range, moving write head to each
