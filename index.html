@@ -917,10 +917,6 @@ const SOFTWARE_CATALOG = [
       { key: 'scav_idx', name: 'SCAV.IDX', size: 4 },
     ],
     ops: [
-      // Create a handful of tmps to fragment the disk
-      { op: 'create', file: null, name: 'SCAV_A.TMP', size: 7 },
-      { op: 'create', file: null, name: 'SCAV_B.TMP', size: 5 },
-      { op: 'create', file: null, name: 'SCAV_C.TMP', size: 9 },
       // Append a fixed chunk to the rolling buffer each cycle
       { op: 'append', file: 'scav_buf', size: 6 },
       // Read the whole buffer to "process" it
@@ -931,6 +927,10 @@ const SOFTWARE_CATALOG = [
       { op: 'compare', cmp: 'lt' },  // size < 60?
       { op: 'if' },                  // true (small): skip exit → jump to truncate section
       { op: 'exit' },                // buffer is fine, bail early
+      // Create a handful of tmps to fragment the disk
+      { op: 'create', file: null, name: 'SCAV_A.TMP', size: 7 },
+      { op: 'create', file: null, name: 'SCAV_B.TMP', size: 5 },
+      { op: 'create', file: null, name: 'SCAV_C.TMP', size: 9 },
       // truncate pops offset first (top), then size — so push size first, then offset
       { op: 'push_size', file: 'scav_buf' },  // [total]
       { op: 'push', value: 4 },
