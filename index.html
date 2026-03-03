@@ -198,7 +198,6 @@
   .block.defrag-read { animation: blink-read 0.2s; }
   .block.defrag-write { animation: blink-write 0.2s; }
 
-  /* Read/write head block highlights */
   .block.head-read {
     outline: 2px solid var(--cyan) !important;
     box-shadow: 0 0 6px var(--cyan), inset 0 0 4px rgba(0,255,255,0.3);
@@ -283,6 +282,7 @@
   .log-line.defrag { color: var(--cyan); }
   .log-line.money { color: var(--gold); }
   .log-line.crash { color: var(--red); font-weight: bold; }
+  .log-line.fs { color: #aa88ff; }
 
   .progress-bar { height: 14px; background: var(--bg2); border: 1px solid var(--border); overflow: hidden; }
   .progress-fill { height: 100%; background: var(--cyan); transition: width 0.1s linear; box-shadow: 0 0 6px var(--cyan); }
@@ -305,7 +305,6 @@
   .fragmentation-meter { height: 8px; background: var(--bg2); border: 1px solid var(--border); overflow: hidden; }
   .frag-fill { height: 100%; transition: width 0.5s; background: linear-gradient(to right, var(--green), var(--amber), var(--red)); }
 
-  /* SOFTWARE CARDS */
   .software-card {
     border: 1px solid var(--border);
     padding: 6px;
@@ -339,7 +338,6 @@
   .sw-btn-row { display: flex; gap: 4px; }
   .sw-btn { flex: 1; font-size: 11px; padding: 2px 6px; font-family: 'VT323', monospace; font-size: 15px; }
 
-  /* SHOP */
   .shop-item {
     border: 1px solid var(--border);
     padding: 5px;
@@ -351,7 +349,6 @@
   .shop-price { color: var(--gold); font-size: 11px; }
   .shop-req { font-size: 10px; color: var(--red); margin-bottom: 3px; }
 
-  /* RAM display */
   .ram-bar { height: 10px; background: var(--bg2); border: 1px solid var(--border); overflow: hidden; margin-top: 3px; }
   .ram-fill { height: 100%; background: var(--amber); transition: width 0.3s; box-shadow: 0 0 4px var(--amber); }
 
@@ -364,8 +361,8 @@
 <div id="block-tooltip"></div>
 <div class="screen">
   <div class="header">
-    <h1>⬛ DEFRAG.EXE v4.2</h1>
-    <div class="subtitle">MIRACULOUS DISK DEFRAGMENTER &amp; SYSTEMS MANAGEMENT SUITE</div>
+    <h1>⬛ DEFRAG.EXE v4.3</h1>
+    <div class="subtitle" id="subtitle">MIRACULOUS DISK DEFRAGMENTER &amp; SYSTEMS MANAGEMENT SUITE</div>
   </div>
 
   <div class="stats-bar">
@@ -396,7 +393,6 @@
     <div class="panel disk-panel">
       <div class="panel-title">💾 DISK BLOCK MAP — C:\</div>
 
-      <!-- DEFRAG CONTROLS — top -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
         <div>
           <div style="color:var(--green-dim);font-size:11px;margin-bottom:3px">DEFRAG MODE:</div>
@@ -427,7 +423,6 @@
 
       <hr class="separator">
 
-      <!-- BLOCK MAP -->
       <div class="legend">
         <div class="legend-item"><div class="legend-dot" style="background:#111;border:1px solid #222"></div> Free</div>
         <div class="legend-item"><div class="legend-dot" style="background:#0066ff"></div> System</div>
@@ -440,7 +435,6 @@
 
     <!-- RIGHT: FILE LIST + LOG + HW -->
     <div class="panel">
-      <!-- Hardware info -->
       <div class="panel-title" style="font-size:14px">⚙ Hardware</div>
       <div style="font-size:11px;color:var(--green-dim)">
         RAM: <span id="hw-ram" style="color:var(--amber)">256 KB</span>
@@ -461,7 +455,6 @@
       <div class="panel-title" style="font-size:14px">📟 Activity Log</div>
       <div id="log" style="flex:1;border:1px solid var(--border);padding:4px;min-height:80px;max-height:280px;overflow-y:auto;"></div>
 
-      <!-- Manual FS ops — always expanded -->
       <hr class="separator">
       <div class="panel-title" style="font-size:14px">📁 Filesystem Ops</div>
       <div class="input-row">
@@ -479,7 +472,6 @@
       <button class="btn" onclick="opRename()">▶ RENAME FILE</button>
       <button class="btn" onclick="opModify()">▶ MODIFY (touch)</button>
 
-      <!-- Bulk ops — collapsed by default -->
       <details>
         <summary style="color:var(--green-dim);font-size:11px;cursor:pointer;user-select:none;margin-top:4px;">▶ Bulk Operations</summary>
         <div style="display:flex;flex-direction:column;gap:5px;margin-top:5px;">
@@ -505,8 +497,16 @@ let DISK_SIZE = 512;
 let RAM_SIZE = 256; // KB
 const COLS = 32;
 
+// disk[i] = fileId or null
 let disk = [];
+
+// files: id -> { name, color, blocks[], created, modified, size, persistent, swId,
+//                openCount, pendingDelete }
 let files = {};
+
+// filesByName: name -> fileId  (primary name→id index, always kept in sync)
+let filesByName = {};
+
 let nextFileId = 1;
 let selectedFileId = null;
 let defragRunning = false;
@@ -514,9 +514,63 @@ let chkdskRunning = false;
 let chkdskStopRequested = false;
 let playerMoney = 0;
 
-// swInstances is declared near RAM TRACKING section
-
 const SYSTEM_BLOCKS = 4;
+
+// ==========================================
+// FILESYSTEM — name lookup & open/close
+// ==========================================
+
+/** Find file id by exact name (case-sensitive after normalisation). Returns null if not found. */
+function findFileByName(name) {
+  const id = filesByName[name];
+  return (id !== undefined && files[id]) ? id : null;
+}
+
+/**
+ * Open a file by id and return a handle object { fid }.
+ * Throws if the file does not exist or is pending deletion (unless allowPending is true).
+ */
+function openFileById(fid, { allowPending = false } = {}) {
+  const f = files[fid];
+  if (!f) throw new Error(`openFile: fid ${fid} not found`);
+  if (!allowPending && f.pendingDelete) throw new Error(`openFile: ${f.name} is pending deletion`);
+  f.openCount = (f.openCount || 0) + 1;
+  return { fid };
+}
+
+/**
+ * Open a file by name. Throws if not found or pending deletion.
+ */
+function openFileByName(name, opts = {}) {
+  const fid = findFileByName(name);
+  if (fid === null) throw new Error(`openFile: '${name}' not found`);
+  return openFileById(fid, opts);
+}
+
+/**
+ * Close a handle returned by openFile*.
+ * If the file was marked pendingDelete and openCount reaches 0, the file is freed.
+ */
+function closeFile(handle) {
+  if (!handle || handle.fid == null) return;
+  const f = files[handle.fid];
+  if (!f) return; // already gone
+  f.openCount = Math.max(0, (f.openCount || 1) - 1);
+  if (f.pendingDelete && f.openCount === 0) {
+    _freeFile(handle.fid);
+  }
+  handle.fid = null; // invalidate handle
+}
+
+// Internal: actually free a file's blocks and remove from index.
+function _freeFile(id) {
+  const f = files[id];
+  if (!f) return;
+  f.blocks.forEach(b => { if (disk[b] === id) disk[b] = null; });
+  delete filesByName[f.name];
+  delete files[id];
+  if (selectedFileId === id) selectedFileId = null;
+}
 
 // ==========================================
 // DISK HEAD SYSTEM — Multi-head with locking
@@ -539,22 +593,12 @@ function xyToNearestBlock(x, y) {
   return row * COLS + col;
 }
 
-// Head pools — start with one of each, expandable via shop
-// Each head: { id, type:'read'|'write', x, y, targetBlock, cssClass, visBlock, inUse: bool }
 let readHeads  = [];
 let writeHeads = [];
 
 function makeHead(type, idx) {
-  return {
-    id: `${type}-${idx}`,
-    type,
-    x: idx * 2,
-    y: 0,
-    targetBlock: idx * 2,
-    cssClass: type === 'read' ? 'head-read' : 'head-write',
-    visBlock: idx * 2,
-    inUse: false,
-  };
+  return { id: `${type}-${idx}`, type, x: idx*2, y: 0, targetBlock: idx*2,
+           cssClass: type==='read' ? 'head-read' : 'head-write', visBlock: idx*2, inUse: false };
 }
 
 function initHeads() {
@@ -562,86 +606,53 @@ function initHeads() {
   writeHeads = [makeHead('write', 0)];
 }
 
-function addReadHead() {
-  readHeads.push(makeHead('read', readHeads.length));
-  log(`Read head #${readHeads.length} installed`, 'action');
-}
+function addReadHead()  { readHeads.push(makeHead('read', readHeads.length)); log(`Read head #${readHeads.length} installed`, 'action'); }
+function addWriteHead() { writeHeads.push(makeHead('write', writeHeads.length)); log(`Write head #${writeHeads.length} installed`, 'action'); }
 
-function addWriteHead() {
-  writeHeads.push(makeHead('write', writeHeads.length));
-  log(`Write head #${writeHeads.length} installed`, 'action');
-}
-
-// Distance from head's current position to a given block index
 function headDistTo(head, targetBlockIdx) {
   const t = blockToXY(targetBlockIdx);
-  const dx = head.x - t.x;
-  const dy = head.y - t.y;
+  const dx = head.x - t.x, dy = head.y - t.y;
   return Math.sqrt(dx*dx + dy*dy);
 }
 
-// Acquire the closest free head from a pool to the given target block (blocks until one is available)
 async function acquireHead(pool, targetBlockIdx) {
   while (true) {
     let best = null, bestDist = Infinity;
     for (const h of pool) {
       if (!h.inUse) {
         const d = headDistTo(h, targetBlockIdx);
-        if ((targetBlockIdx === undefined) || (d < bestDist)) { bestDist = d; best = h; }
+        if (d < bestDist) { bestDist = d; best = h; }
       }
     }
-    if (best) {
-      best.inUse = true;
-      return best;
-    }
-    // None free — wait a tick and retry
+    if (best) { best.inUse = true; return best; }
     await sleep(20);
   }
 }
 
-function releaseHead(head) {
-  head.inUse = false;
-}
+function releaseHead(head) { head.inUse = false; }
 
-// Move a specific head to a block; resolves when arrived
 function moveHeadTo(head, blockIdx) {
   head.targetBlock = blockIdx;
   const target = blockToXY(blockIdx);
-
   return new Promise(resolve => {
     let lastTime = null;
-
     function step(ts) {
       if (lastTime === null) lastTime = ts;
       const dt = Math.min((ts - lastTime) / 1000, 0.05);
       lastTime = ts;
-
-      const dx = target.x - head.x;
-      const dy = target.y - head.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (isNaN(dist)) {
-        throw new Error('');
-      }
+      const dx = target.x - head.x, dy = target.y - head.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
       if (dist <= HEAD_SNAP) {
-        head.x = target.x;
-        head.y = target.y;
-        const newVis = xyToNearestBlock(head.x, head.y);
-        updateHeadVisual(head, newVis);
-        resolve();
-        return;
+        head.x = target.x; head.y = target.y;
+        updateHeadVisual(head, xyToNearestBlock(head.x, head.y));
+        resolve(); return;
       }
-
       const move = getHeadSpeed() * dt;
       const ratio = Math.min(1, move / dist);
-      head.x += dx * ratio;
-      head.y += dy * ratio;
-
-      const newVis = xyToNearestBlock(head.x, head.y);
-      updateHeadVisual(head, newVis);
-
+      head.x += dx * ratio; head.y += dy * ratio;
+      updateHeadVisual(head, xyToNearestBlock(head.x, head.y));
       requestAnimationFrame(step);
     }
-
     requestAnimationFrame(step);
   });
 }
@@ -656,8 +667,6 @@ function updateHeadVisual(head, newVisBlock) {
   if (el) el.classList.add(head.cssClass);
 }
 
-// High-level helpers: acquire closest free head, move it, return it locked.
-// Caller must releaseHead() when done with the operation.
 async function acquireAndMoveReadHead(blockIdx) {
   const head = await acquireHead(readHeads, blockIdx);
   await moveHeadTo(head, blockIdx);
@@ -670,321 +679,19 @@ async function acquireAndMoveWriteHead(blockIdx) {
   return head;
 }
 
-// Compatibility wrappers used by defrag (acquire + move + release)
-async function moveReadHead(blockIdx) {
-  const head = await acquireAndMoveReadHead(blockIdx);
-  releaseHead(head);
-}
-
-async function moveWriteHead(blockIdx) {
-  const head = await acquireAndMoveWriteHead(blockIdx);
-  releaseHead(head);
-}
-
-// ==========================================
-// SHOP CATALOG
-// ==========================================
-const SHOP_UPGRADES = [
-  {
-    id: 'rhead2',
-    name: 'Read Head #2',
-    desc: 'Second read head — parallel software reads.',
-    price: 80,
-    ramReq: 0,
-    type: 'rhead',
-    bought: false,
-  },
-  {
-    id: 'rhead3',
-    name: 'Read Head #3',
-    desc: 'Third read head — maximum read parallelism.',
-    price: 250,
-    ramReq: 0,
-    type: 'rhead',
-    requires: 'rhead2',
-    bought: false,
-  },
-  {
-    id: 'whead2',
-    name: 'Write Head #2',
-    desc: 'Second write head — parallel software writes.',
-    price: 100,
-    ramReq: 0,
-    type: 'whead',
-    bought: false,
-  },
-  {
-    id: 'whead3',
-    name: 'Write Head #3',
-    desc: 'Third write head — maximum write throughput.',
-    price: 320,
-    ramReq: 0,
-    type: 'whead',
-    requires: 'whead2',
-    bought: false,
-  },
-  {
-    id: 'hdd512',
-    name: 'HDD Upgrade: 1024 BLK',
-    desc: 'Double your disk capacity to 1024 blocks.',
-    price: 50,
-    ramReq: 0,
-    type: 'hdd',
-    value: 1024,
-    bought: false,
-  },
-  {
-    id: 'hdd2048',
-    name: 'HDD Upgrade: 2048 BLK',
-    desc: 'Expand to 2048 blocks of storage.',
-    price: 300,
-    ramReq: 0,
-    type: 'hdd',
-    value: 2048,
-    bought: false,
-  },
-  {
-    id: 'ram512',
-    name: 'RAM Upgrade: 512 KB',
-    desc: 'More memory — run heavier software.',
-    price: 30,
-    ramReq: 0,
-    type: 'ram',
-    value: 512,
-    bought: false,
-  },
-  {
-    id: 'ram1024',
-    name: 'RAM Upgrade: 1024 KB',
-    desc: 'Beefy RAM for server-class programs.',
-    price: 150,
-    ramReq: 512,
-    type: 'ram',
-    value: 1024,
-    bought: false,
-  },
-  {
-    id: 'ram2048',
-    name: 'RAM Upgrade: 2048 KB',
-    desc: 'Enterprise-grade memory headroom.',
-    price: 800,
-    ramReq: 1024,
-    type: 'ram',
-    value: 2048,
-    bought: false,
-  },
-];
-
-// ==========================================
-// SOFTWARE CATALOG
-// ==========================================
-// Operations: { op: 'create'|'append'|'delete'|'read'|'earn', file?, size?, amount? }
-// 'file' can be a key string → persistent named file; or null → temp file (tracked per-run)
-// read: offset (default 0, negative = from end), size (default all, negative = relative to end)
-const SOFTWARE_CATALOG = [
-  {
-    id: 'sw_ledger',
-    name: 'LEDGER.EXE',
-    desc: 'A tiny accounting script. Reads a ledger file and earns a small fee.',
-    badgeType: 'idle',
-    price: 0, // starter — free / auto-installed
-    ramReq: 64,
-    isServer: false,
-    persistentFiles: [
-      { key: 'ledger_dat', name: 'LEDGER.DAT', size: 2 }
-    ],
-    ops: [
-      { op: 'read', file: 'ledger_dat', offset: 0, size: -1 }, // read whole file
-      { op: 'earn', amount: 10.05 },
-    ],
-  },
-  {
-    id: 'sw_sorter',
-    name: 'SORTR.EXE',
-    desc: 'Sorts data batches. Creates temp files and earns on completion.',
-    badgeType: 'idle',
-    price: 15,
-    ramReq: 128,
-    isServer: false,
-    persistentFiles: [
-      { key: 'sort_cfg', name: 'SORTR.CFG', size: 1 },
-    ],
-    ops: [
-      { op: 'create', file: null, name: 'SORT_TMP.DAT', size: 5 },
-      { op: 'read', file: 'sort_cfg', offset: 0, size: -1 },  // read whole config
-      { op: 'append', file: null, size: 3 },
-      { op: 'earn', amount: 0.30 },
-      { op: 'delete', file: null },
-    ],
-  },
-  {
-    id: 'sw_archiver',
-    name: 'ARCHIVR.EXE',
-    desc: 'Compresses and archives files. Moderate earnings.',
-    badgeType: 'idle',
-    price: 60,
-    ramReq: 256,
-    isServer: false,
-    persistentFiles: [
-      { key: 'arch_idx', name: 'ARCH.IDX', size: 3 },
-      { key: 'arch_db', name: 'ARCH.DB', size: 8 },
-    ],
-    ops: [
-      { op: 'read', file: 'arch_idx', offset: 0, size: -1 },  // scan full index
-      { op: 'create', file: null, name: 'PACK.TMP', size: 12 },
-      { op: 'append', file: 'arch_db', size: 4 },
-      { op: 'read', file: 'arch_db', offset: -2, size: -1 },  // verify last 2 written blocks
-      { op: 'earn', amount: 1.20 },
-      { op: 'delete', file: null },
-    ],
-  },
-  {
-    id: 'sw_cruncher',
-    name: 'CRUNCHR.EXE',
-    desc: 'Number crunching daemon. Runs continuously as a server.',
-    badgeType: 'server',
-    price: 200,
-    ramReq: 512,
-    isServer: true,
-    persistentFiles: [
-      { key: 'crunch_cfg', name: 'CRUNCH.CFG', size: 2 },
-      { key: 'crunch_log', name: 'CRUNCH.LOG', size: 6 },
-    ],
-    ops: [
-      { op: 'read', file: 'crunch_cfg', offset: 0, size: -1 },   // read full config
-      { op: 'create', file: null, name: 'CHUNK.TMP', size: 8 },
-      { op: 'read', file: 'crunch_log', offset: -1, size: -1 },  // check tail of log
-      { op: 'append', file: 'crunch_log', size: 2 },
-      { op: 'earn', amount: 3.50 },
-      { op: 'delete', file: null },
-      // Truncate crunch_log when it grows beyond 128 blocks
-      { op: 'push_size', file: 'crunch_log' },
-      { op: 'push', value: 128 },
-      { op: 'compare', cmp: 'lt' },   // stack: [crunch_log.size < 128]
-      { op: 'if' },                    // if true (size < 128): skip next op (exit), so we do truncate
-      { op: 'exit' },                  // size is fine, bail out early
-      { op: 'truncate', file: 'crunch_log', offset: 0, size: -1 },  // free all blocks → truncate to empty; pushes freed count
-      { op: 'pop' },  // discard freed count, not needed here
-    ],
-  },
-  {
-    id: 'sw_datamill',
-    name: 'DATAMILL.EXE',
-    desc: 'Continuous data pipeline. Heavy on disk. High reward server.',
-    badgeType: 'server',
-    price: 800,
-    ramReq: 1024,
-    isServer: true,
-    persistentFiles: [
-      { key: 'mill_cfg', name: 'MILL.CFG', size: 2 },
-      { key: 'mill_idx', name: 'MILL.IDX', size: 10 },
-      { key: 'mill_out', name: 'MILL.OUT', size: 20 },
-    ],
-    ops: [
-      { op: 'read', file: 'mill_cfg', offset: 0, size: -1 },       // full config
-      { op: 'read', file: 'mill_idx', offset: -3, size: -1 },      // scan last 3 index entries
-      { op: 'create', file: null, name: 'PIPE_A.TMP', size: 15 },
-      { op: 'create', file: null, name: 'PIPE_B.TMP', size: 10 },
-      { op: 'append', file: 'mill_out', size: 5 },
-      { op: 'append', file: 'mill_idx', size: 3 },
-      { op: 'earn', amount: 18.00 },
-      { op: 'delete', file: null, which: 'PIPE_A.TMP' },
-      { op: 'delete', file: null, which: 'PIPE_B.TMP' },
-    ],
-  },
-  {
-    id: 'sw_gridnode',
-    name: 'GRIDNODE.SRV',
-    desc: 'A compute grid node. Massively fragments disk. Enormous revenue.',
-    badgeType: 'server',
-    price: 3000,
-    ramReq: 2048,
-    isServer: true,
-    persistentFiles: [
-      { key: 'gn_cfg', name: 'GRID.CFG', size: 3 },
-      { key: 'gn_state', name: 'GRID.STA', size: 15 },
-      { key: 'gn_db', name: 'GRID.DB', size: 40 },
-    ],
-    ops: [
-      { op: 'read', file: 'gn_cfg', offset: 0, size: -1 },        // full config
-      { op: 'read', file: 'gn_state', offset: 0, size: 4 },       // read first 4 state blocks
-      { op: 'create', file: null, name: 'NODE_A.TMP', size: 20 },
-      { op: 'create', file: null, name: 'NODE_B.TMP', size: 18 },
-      { op: 'create', file: null, name: 'NODE_C.TMP', size: 14 },
-      { op: 'append', file: 'gn_db', size: 8 },
-      { op: 'append', file: 'gn_state', size: 4 },
-      { op: 'read', file: 'gn_db', offset: -4, size: -1 },        // verify last 4 db blocks
-      { op: 'earn', amount: 90.00 },
-      { op: 'delete', file: null, which: 'NODE_A.TMP' },
-      { op: 'delete', file: null, which: 'NODE_B.TMP' },
-      { op: 'delete', file: null, which: 'NODE_C.TMP' },
-    ],
-  },
-  {
-    id: 'sw_scavenger',
-    name: 'SCAVNGR.EXE',
-    desc: 'Scavenges disk space by fragmenting tmps into a rolling buffer, then reclaims random chunks. Earns per block reclaimed.',
-    badgeType: 'server',
-    price: 500,
-    ramReq: 512,
-    isServer: true,
-    persistentFiles: [
-      { key: 'scav_buf', name: 'SCAV.BUF', size: 10 },
-      { key: 'scav_idx', name: 'SCAV.IDX', size: 4 },
-    ],
-    ops: [
-      // Append a fixed chunk to the rolling buffer each cycle
-      { op: 'append', file: 'scav_buf', size: 6 },
-      // Read the whole buffer to "process" it
-      { op: 'read', file: 'scav_buf', offset: 0, size: -1 },
-      // Check if buffer has grown past threshold (60 blocks)
-      { op: 'push_size', file: 'scav_buf' },
-      { op: 'push', value: 60 },
-      { op: 'compare', cmp: 'lt' },  // size < 60?
-      { op: 'if' },                  // true (small): skip exit → jump to truncate section
-      { op: 'exit' },                // buffer is fine, bail early
-      // Create a handful of tmps to fragment the disk
-      { op: 'create', file: null, name: 'SCAV_A.TMP', size: 7 },
-      { op: 'create', file: null, name: 'SCAV_B.TMP', size: 5 },
-      { op: 'create', file: null, name: 'SCAV_C.TMP', size: 9 },
-      // truncate pops offset first (top), then size — so push size first, then offset
-      { op: 'push_size', file: 'scav_buf' },  // [total]
-      { op: 'push', value: 4 },
-      { op: 'calc', op2: 'div' },             // [total/4]  ← this becomes the size to reclaim
-      { op: 'push_random', min: 0.5, max: 1.5 },
-      { op: 'calc', op2: 'mul' },             // [rand_size ≈ total/8..total/3]  ← SIZE (pushed first = under)
-      { op: 'push_size', file: 'scav_buf' },  // [rand_size, total]
-      { op: 'push', value: 2 },
-      { op: 'calc', op2: 'div' },             // [rand_size, total/2]
-      { op: 'push_random', min: 0, max: 1 },  // [rand_size, total/2, rand 0..1]
-      { op: 'calc', op2: 'mul' },             // [rand_size, offset ≈ 0..total/2]  ← OFFSET (pushed last = top)
-      // truncate pops offset (top), then size (under); pushes freed_count
-      { op: 'truncate', file: 'scav_buf' },
-      // Earn $1.50 per reclaimed block
-      { op: 'push', value: 1.50 },
-      { op: 'calc', op2: 'mul' },
-      { op: 'earn' },
-      // Update index to log the reclaim event
-      { op: 'append', file: 'scav_idx', size: 1 },
-      // Clean up tmps
-      { op: 'delete', file: null, which: 'SCAV_A.TMP' },
-      { op: 'delete', file: null, which: 'SCAV_B.TMP' },
-      { op: 'delete', file: null, which: 'SCAV_C.TMP' },
-    ],
-  },
-];
-
-// installedSoftware: id -> { ...catalog entry, persistentFileIds: { key -> fileId } }
-let installedSoftware = {};
+async function moveReadHead(blockIdx)  { const h = await acquireAndMoveReadHead(blockIdx);  releaseHead(h); }
+async function moveWriteHead(blockIdx) { const h = await acquireAndMoveWriteHead(blockIdx); releaseHead(h); }
 
 // ==========================================
 // DISK MODEL
 // ==========================================
 function initDisk() {
   disk = new Array(DISK_SIZE).fill(null);
-  // Reserve system blocks
   for (let i = 0; i < SYSTEM_BLOCKS; i++) disk[i] = 0;
-  files[0] = { name: 'SYSTEM', color: '#0044cc', blocks: [...Array(SYSTEM_BLOCKS).keys()], created: 0, modified: 0, size: SYSTEM_BLOCKS, persistent: true };
+  files[0] = { name: 'SYSTEM', color: '#0044cc', blocks: [...Array(SYSTEM_BLOCKS).keys()],
+               created: 0, modified: 0, size: SYSTEM_BLOCKS, persistent: true,
+               openCount: 0, pendingDelete: false };
+  filesByName['SYSTEM'] = 0;
 }
 
 const FILE_COLORS = [
@@ -997,44 +704,60 @@ let colorIdx = 0;
 function nextColor() { return FILE_COLORS[colorIdx++ % FILE_COLORS.length]; }
 
 function findFreeBlocks(count) {
-  let free = [];
+  const free = [];
   for (let i = SYSTEM_BLOCKS; i < DISK_SIZE && free.length < count; i++) {
     if (disk[i] === null) free.push(i);
   }
   return free.length >= count ? free : null;
 }
 
+/**
+ * Allocate a new file. Returns file id or null on failure.
+ * Refuses to create if a file with the same name already exists.
+ */
 function allocateFile(name, size, opts = {}) {
+  if (filesByName[name] !== undefined) {
+    if (!opts.silent) log(`FS: file '${name}' already exists`, 'err');
+    return null;
+  }
   const blocks = findFreeBlocks(size);
-  if (!blocks) { log(`DISK FULL — cannot create ${name}`, 'err'); return null; }
+  if (!blocks) { if (!opts.silent) log(`DISK FULL — cannot create ${name}`, 'err'); return null; }
   const id = nextFileId++;
   const color = opts.color || nextColor();
   blocks.forEach(b => disk[b] = id);
   files[id] = {
-    name, color,
-    blocks: [...blocks],
-    created: Date.now(),
-    modified: Date.now(),
-    size,
-    persistent: opts.persistent || false,
-    swId: opts.swId || null,
+    name, color, blocks: [...blocks],
+    created: Date.now(), modified: Date.now(),
+    size, persistent: opts.persistent || false, swId: opts.swId || null,
+    openCount: 0, pendingDelete: false,
   };
+  filesByName[name] = id;
   if (!opts.silent) log(`Created ${name} [${size} blk]`, 'action');
   return id;
 }
 
+/**
+ * Request deletion of a file by id.
+ * If the file has open handles, marks it pendingDelete — actual freeing happens on last close.
+ * Returns true if accepted (immediate or deferred), false if refused (system/not found).
+ */
 function deleteFile(id) {
   if (!files[id] || id === 0) return false;
-  files[id].blocks.forEach(b => disk[b] = null);
-  delete files[id];
-  // Always clear selection if this file was selected or selected file no longer exists
-  if (selectedFileId === id || !files[selectedFileId]) selectedFileId = null;
+  const f = files[id];
+  if (f.openCount > 0) {
+    f.pendingDelete = true;
+    // Remove from name index immediately so the name can be reused
+    delete filesByName[f.name];
+    if (!f._silentDelete) log(`FS: ${f.name} marked pending-delete (${f.openCount} handles open)`, 'fs');
+    return true;
+  }
+  _freeFile(id);
   return true;
 }
 
 function appendFile(id, extra) {
   const f = files[id];
-  if (!f) return false;
+  if (!f || f.pendingDelete) return false;
   const newBlocks = findFreeBlocks(extra);
   if (!newBlocks) return false;
   newBlocks.forEach(b => { disk[b] = id; f.blocks.push(b); });
@@ -1047,9 +770,7 @@ function countFragments(blocks) {
   if (blocks.length === 0) return 0;
   const sorted = [...blocks].sort((a,b)=>a-b);
   let frags = 1;
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i] !== sorted[i-1]+1) frags++;
-  }
+  for (let i = 1; i < sorted.length; i++) if (sorted[i] !== sorted[i-1]+1) frags++;
   return frags;
 }
 
@@ -1063,7 +784,6 @@ function getFragmentation() {
   if (used === 0) return 0;
   return Math.min(100, Math.round((totalFragments / Math.max(1, used)) * 200));
 }
-
 
 // ==========================================
 // DEFRAG ENGINE
@@ -1113,6 +833,7 @@ async function runDefrag(mode, speed) {
     fileOrder.sort((a,b) => { if (a===0) return -1; if (b===0) return 1; return files[b].size - files[a].size; });
   }
 
+  // Build ideal layout
   let ideal = new Array(DISK_SIZE).fill(null);
   let cursor = 0;
   for (const id of fileOrder) {
@@ -1137,20 +858,34 @@ async function runDefrag(mode, speed) {
       if (sourcePos === -1) for (let i = targetPos+1; i < DISK_SIZE; i++) { if (disk[i] === wantedId) { sourcePos = i; break; } }
       if (sourcePos === -1) continue;
 
-      if (disk[targetPos] !== null) {
-        let park = -1;
-        for (let i = DISK_SIZE - 1; i >= 0; i--) { if (disk[i] === null) { park = i; break; } }
-        if (park !== -1) await moveBlockOnDisk(targetPos, park);
+      // Open the file we are about to touch (allows pending-delete files to survive the move)
+      const fileHandle = openFileById(wantedId, { allowPending: true });
+      try {
+        if (disk[targetPos] !== null) {
+          const parkId = disk[targetPos];
+          let park = -1;
+          for (let i = DISK_SIZE - 1; i >= 0; i--) { if (disk[i] === null) { park = i; break; } }
+          if (park !== -1) {
+            const parkHandle = openFileById(parkId, { allowPending: true });
+            try {
+              await defragMoveBlock(targetPos, park);
+            } finally {
+              closeFile(parkHandle);
+            }
+          }
+        }
+
+        await defragMoveBlock(sourcePos, targetPos);
+
+        if (targetPos > 0 && disk[targetPos-1] !== null && disk[targetPos-1] === disk[targetPos]) {
+          playerMoney += 0.01;
+          renderMoney();
+          showCoinAtBlock(targetPos);
+        }
+      } finally {
+        closeFile(fileHandle);
       }
 
-      await moveBlockOnDisk(sourcePos, targetPos);
-      // Reward: if the newly placed block is adjacent to the previous block of the same file, pay out
-      if (targetPos > 0 && disk[targetPos - 1] !== null && disk[targetPos - 1] === disk[targetPos]) {
-        const reward = 0.01;
-        playerMoney += reward;
-        renderMoney();
-        showCoinAtBlock(targetPos);
-      }
       moves++;
       const pct = Math.min(99, Math.round((targetPos / DISK_SIZE) * 100));
       document.getElementById('defrag-progress').style.width = pct + '%';
@@ -1161,14 +896,33 @@ async function runDefrag(mode, speed) {
   render();
 }
 
-// Legacy flash (kept for brief visual pop after head arrives)
+/** Move one block during defrag: read from `from`, write to `to`, update disk[] and file. */
+async function defragMoveBlock(from, to) {
+  // Read source
+  const rHead = await acquireAndMoveReadHead(from);
+  flashBlock(from, 'defrag-read');
+  releaseHead(rHead);
+
+  // Write to dest
+  const wHead = await acquireAndMoveWriteHead(to);
+  flashBlock(to, 'defrag-write');
+  releaseHead(wHead);
+
+  const id = disk[from];
+  disk[to] = id;
+  disk[from] = null;
+  const f = files[id];
+  if (f) { const bi = f.blocks.indexOf(from); if (bi !== -1) f.blocks[bi] = to; }
+}
+
 function flashBlock(pos, cls) {
   const el = document.querySelector(`[data-block="${pos}"]`);
   if (el) { el.classList.add(cls); setTimeout(() => el.classList.remove(cls), 150); }
 }
 
-// High-level block I/O — acquire the closest free head, move it to the block,
-// flash the access animation, then release the head.
+// ==========================================
+// BLOCK I/O HELPERS (used by software ops)
+// ==========================================
 async function readBlock(blockIdx) {
   const head = await acquireAndMoveReadHead(blockIdx);
   flashBlock(blockIdx, 'defrag-read');
@@ -1181,24 +935,60 @@ async function writeBlock(blockIdx) {
   releaseHead(head);
 }
 
-// Move one block's data from one disk position to another:
-// reads from `from`, writes to `to`, updates disk[] and the owning file's block list.
-// `to` must already be free (disk[to] === null).
-async function moveBlockOnDisk(from, to) {
-  await readBlock(from);
-  await writeBlock(to);
-  const id = disk[from];
-  disk[to] = id;
-  disk[from] = null;
-  const f = files[id];
-  if (f) { const bi = f.blocks.indexOf(from); if (bi !== -1) f.blocks[bi] = to; }
+// Range resolution for read/truncate ops
+function resolveRange(len, rawOffset, rawSize) {
+  const offset = rawOffset < 0
+    ? Math.max(0, len + Math.round(rawOffset))
+    : Math.min(Math.round(rawOffset), len);
+  let count;
+  if (rawSize == null) { count = len - offset; }
+  else if (rawSize < 0) { count = Math.max(0, (len - offset) + Math.round(rawSize) + 1); }
+  else { count = Math.min(Math.round(rawSize), len - offset); }
+  return { offset, count };
+}
+
+async function readFileFid(fid, rawOffset, rawSize) {
+  const f = files[fid];
+  if (!f || f.blocks.length === 0) return;
+  const { offset, count } = resolveRange(f.blocks.length, rawOffset ?? 0, rawSize ?? null);
+  for (let i = 0; i < count; i++) await readBlock(f.blocks[offset + i]);
+}
+
+async function writeNewBlocks(fid, prevLen) {
+  const f = files[fid];
+  for (let i = prevLen; i < f.blocks.length; i++) await writeBlock(f.blocks[i]);
+}
+
+async function appendFileAndWrite(fid, size) {
+  const prevLen = files[fid].blocks.length;
+  if (!appendFile(fid, size)) throw new Error('disk full during append');
+  await writeNewBlocks(fid, prevLen);
+}
+
+async function deleteFileAndWrite(fid) {
+  const f = files[fid];
+  if (f && f.blocks.length > 0) await writeBlock(f.blocks[0]);
+  deleteFile(fid);
+}
+
+async function truncateFileFid(fid, rawOffset, rawSize) {
+  const f = files[fid];
+  const { offset, count } = resolveRange(f.blocks.length, rawOffset, rawSize);
+  for (let ti = offset; ti < offset + count; ti++) {
+    const blockIdx = f.blocks[ti];
+    if (blockIdx === undefined) continue;
+    await writeBlock(blockIdx);
+    if (disk[blockIdx] === fid) disk[blockIdx] = null;
+  }
+  f.blocks.splice(offset, count);
+  f.size = f.blocks.length;
+  f.modified = Date.now();
+  return count;
 }
 
 // ==========================================
 // RAM TRACKING
 // ==========================================
-// swInstances: swId -> array of running instance objects
-// Each instance: { id, running, crashed, stepIndex, progress, tmpFiles, stopRequested }
 let swInstances = {};
 let nextInstanceId = 1;
 
@@ -1207,9 +997,7 @@ function getRamUsed() {
   for (const [swId, instances] of Object.entries(swInstances)) {
     const sw = installedSoftware[swId];
     if (!sw) continue;
-    for (const inst of instances) {
-      if (inst.running) used += sw.ramReq;
-    }
+    for (const inst of instances) { if (inst.running) used += sw.ramReq; }
   }
   return used;
 }
@@ -1217,18 +1005,223 @@ function getRamUsed() {
 function getRamFree() { return RAM_SIZE - getRamUsed(); }
 
 // ==========================================
+// SHOP CATALOG
+// ==========================================
+const SHOP_UPGRADES = [
+  { id:'rhead2', name:'Read Head #2',        desc:'Second read head — parallel software reads.',       price:80,   ramReq:0,    type:'rhead', bought:false },
+  { id:'rhead3', name:'Read Head #3',        desc:'Third read head — maximum read parallelism.',       price:250,  ramReq:0,    type:'rhead', requires:'rhead2', bought:false },
+  { id:'whead2', name:'Write Head #2',       desc:'Second write head — parallel software writes.',     price:100,  ramReq:0,    type:'whead', bought:false },
+  { id:'whead3', name:'Write Head #3',       desc:'Third write head — maximum write throughput.',      price:320,  ramReq:0,    type:'whead', requires:'whead2', bought:false },
+  { id:'hdd512', name:'HDD Upgrade: 1024 BLK', desc:'Double your disk capacity to 1024 blocks.',      price:50,   ramReq:0,    type:'hdd',   value:1024, bought:false },
+  { id:'hdd2048',name:'HDD Upgrade: 2048 BLK', desc:'Expand to 2048 blocks of storage.',              price:300,  ramReq:0,    type:'hdd',   value:2048, bought:false },
+  { id:'ram512', name:'RAM Upgrade: 512 KB', desc:'More memory — run heavier software.',               price:30,   ramReq:0,    type:'ram',   value:512,  bought:false },
+  { id:'ram1024',name:'RAM Upgrade: 1024 KB',desc:'Beefy RAM for server-class programs.',              price:150,  ramReq:512,  type:'ram',   value:1024, bought:false },
+  { id:'ram2048',name:'RAM Upgrade: 2048 KB',desc:'Enterprise-grade memory headroom.',                 price:800,  ramReq:1024, type:'ram',   value:2048, bought:false },
+];
+
+// ==========================================
+// SOFTWARE CATALOG
+// ==========================================
+// Persistent files: { key, name, size }  — name is the base filename
+// Temp files in ops: { op:'create', tmpKey:'...', name:'SORT_TMP.DAT', size }
+//   At runtime, tmpKey+name are scoped per-instance: SORT_TMP_i3_1.DAT etc.
+// All ops reference files by persistent key or tmpKey (strings), not fids.
+const SOFTWARE_CATALOG = [
+  {
+    id: 'sw_ledger',
+    name: 'LEDGER.EXE',
+    desc: 'A tiny accounting script. Reads a ledger file and earns a small fee.',
+    badgeType: 'idle',
+    price: 0,
+    ramReq: 64,
+    isServer: false,
+    persistentFiles: [{ key:'ledger_dat', name:'LEDGER.DAT', size:2 }],
+    ops: [
+      { op:'read', file:'ledger_dat', offset:0, size:-1 },
+      { op:'earn', amount:10.05 },
+    ],
+  },
+  {
+    id: 'sw_sorter',
+    name: 'SORTR.EXE',
+    desc: 'Sorts data batches. Creates temp files and earns on completion.',
+    badgeType: 'idle',
+    price: 15,
+    ramReq: 128,
+    isServer: false,
+    persistentFiles: [{ key:'sort_cfg', name:'SORTR.CFG', size:1 }],
+    ops: [
+      { op:'create', tmpKey:'sort_tmp', name:'SORT_TMP.DAT', size:5 },
+      { op:'read',   file:'sort_cfg', offset:0, size:-1 },
+      { op:'append', tmpKey:'sort_tmp', size:3 },
+      { op:'earn',   amount:0.30 },
+      { op:'delete', tmpKey:'sort_tmp' },
+    ],
+  },
+  {
+    id: 'sw_archiver',
+    name: 'ARCHIVR.EXE',
+    desc: 'Compresses and archives files. Moderate earnings.',
+    badgeType: 'idle',
+    price: 60,
+    ramReq: 256,
+    isServer: false,
+    persistentFiles: [
+      { key:'arch_idx', name:'ARCH.IDX', size:3 },
+      { key:'arch_db',  name:'ARCH.DB',  size:8 },
+    ],
+    ops: [
+      { op:'read',   file:'arch_idx', offset:0, size:-1 },
+      { op:'create', tmpKey:'pack_tmp', name:'PACK.TMP', size:12 },
+      { op:'append', file:'arch_db', size:4 },
+      { op:'read',   file:'arch_db', offset:-2, size:-1 },
+      { op:'earn',   amount:1.20 },
+      { op:'delete', tmpKey:'pack_tmp' },
+    ],
+  },
+  {
+    id: 'sw_cruncher',
+    name: 'CRUNCHR.EXE',
+    desc: 'Number crunching daemon. Runs continuously as a server.',
+    badgeType: 'server',
+    price: 200,
+    ramReq: 512,
+    isServer: true,
+    persistentFiles: [
+      { key:'crunch_cfg', name:'CRUNCH.CFG', size:2 },
+      { key:'crunch_log', name:'CRUNCH.LOG', size:6 },
+    ],
+    ops: [
+      { op:'read',   file:'crunch_cfg', offset:0, size:-1 },
+      { op:'create', tmpKey:'chunk_tmp', name:'CHUNK.TMP', size:8 },
+      { op:'read',   file:'crunch_log', offset:-1, size:-1 },
+      { op:'append', file:'crunch_log', size:2 },
+      { op:'earn',   amount:3.50 },
+      { op:'delete', tmpKey:'chunk_tmp' },
+      // Truncate crunch_log when it grows past 128 blocks
+      { op:'push_size', file:'crunch_log' },
+      { op:'push',  value:128 },
+      { op:'compare', cmp:'lt' },
+      { op:'if' },
+      { op:'exit' },
+      { op:'truncate', file:'crunch_log', offset:0, size:-1 },
+      { op:'pop' },
+    ],
+  },
+  {
+    id: 'sw_datamill',
+    name: 'DATAMILL.EXE',
+    desc: 'Continuous data pipeline. Heavy on disk. High reward server.',
+    badgeType: 'server',
+    price: 800,
+    ramReq: 1024,
+    isServer: true,
+    persistentFiles: [
+      { key:'mill_cfg', name:'MILL.CFG', size:2 },
+      { key:'mill_idx', name:'MILL.IDX', size:10 },
+      { key:'mill_out', name:'MILL.OUT', size:20 },
+    ],
+    ops: [
+      { op:'read',   file:'mill_cfg', offset:0, size:-1 },
+      { op:'read',   file:'mill_idx', offset:-3, size:-1 },
+      { op:'create', tmpKey:'pipe_a', name:'PIPE_A.TMP', size:15 },
+      { op:'create', tmpKey:'pipe_b', name:'PIPE_B.TMP', size:10 },
+      { op:'append', file:'mill_out', size:5 },
+      { op:'append', file:'mill_idx', size:3 },
+      { op:'earn',   amount:18.00 },
+      { op:'delete', tmpKey:'pipe_a' },
+      { op:'delete', tmpKey:'pipe_b' },
+    ],
+  },
+  {
+    id: 'sw_gridnode',
+    name: 'GRIDNODE.SRV',
+    desc: 'A compute grid node. Massively fragments disk. Enormous revenue.',
+    badgeType: 'server',
+    price: 3000,
+    ramReq: 2048,
+    isServer: true,
+    persistentFiles: [
+      { key:'gn_cfg',   name:'GRID.CFG', size:3 },
+      { key:'gn_state', name:'GRID.STA', size:15 },
+      { key:'gn_db',    name:'GRID.DB',  size:40 },
+    ],
+    ops: [
+      { op:'read',   file:'gn_cfg',   offset:0,  size:-1 },
+      { op:'read',   file:'gn_state', offset:0,  size:4 },
+      { op:'create', tmpKey:'node_a', name:'NODE_A.TMP', size:20 },
+      { op:'create', tmpKey:'node_b', name:'NODE_B.TMP', size:18 },
+      { op:'create', tmpKey:'node_c', name:'NODE_C.TMP', size:14 },
+      { op:'append', file:'gn_db',    size:8 },
+      { op:'append', file:'gn_state', size:4 },
+      { op:'read',   file:'gn_db',    offset:-4, size:-1 },
+      { op:'earn',   amount:90.00 },
+      { op:'delete', tmpKey:'node_a' },
+      { op:'delete', tmpKey:'node_b' },
+      { op:'delete', tmpKey:'node_c' },
+    ],
+  },
+  {
+    id: 'sw_scavenger',
+    name: 'SCAVNGR.EXE',
+    desc: 'Scavenges disk space — fragments tmps into a rolling buffer, reclaims random chunks. Earns per block reclaimed.',
+    badgeType: 'server',
+    price: 500,
+    ramReq: 512,
+    isServer: true,
+    persistentFiles: [
+      { key:'scav_buf', name:'SCAV.BUF', size:10 },
+      { key:'scav_idx', name:'SCAV.IDX', size:4 },
+    ],
+    ops: [
+      { op:'append', file:'scav_buf', size:6 },
+      { op:'read',   file:'scav_buf', offset:0, size:-1 },
+      { op:'push_size', file:'scav_buf' },
+      { op:'push',  value:60 },
+      { op:'compare', cmp:'lt' },
+      { op:'if' },
+      { op:'exit' },
+      { op:'create', tmpKey:'scav_a', name:'SCAV_A.TMP', size:7 },
+      { op:'create', tmpKey:'scav_b', name:'SCAV_B.TMP', size:5 },
+      { op:'create', tmpKey:'scav_c', name:'SCAV_C.TMP', size:9 },
+      { op:'push_size', file:'scav_buf' },
+      { op:'push',  value:4 },
+      { op:'calc',  op2:'div' },
+      { op:'push_random', min:0.5, max:1.5 },
+      { op:'calc',  op2:'mul' },
+      { op:'push_size', file:'scav_buf' },
+      { op:'push',  value:2 },
+      { op:'calc',  op2:'div' },
+      { op:'push_random', min:0, max:1 },
+      { op:'calc',  op2:'mul' },
+      { op:'truncate', file:'scav_buf' },
+      { op:'push',  value:1.50 },
+      { op:'calc',  op2:'mul' },
+      { op:'earn' },
+      { op:'append', file:'scav_idx', size:1 },
+      { op:'delete', tmpKey:'scav_a' },
+      { op:'delete', tmpKey:'scav_b' },
+      { op:'delete', tmpKey:'scav_c' },
+    ],
+  },
+];
+
+// installedSoftware: id -> { ...catalog entry, persistentFileNames: { key -> filename } }
+let installedSoftware = {};
+
+// ==========================================
 // SOFTWARE SYSTEM
 // ==========================================
+
 function installSoftware(swDef) {
-  const sw = { ...swDef, persistentFileIds: {} };
-  // Create persistent files
+  const sw = { ...swDef, persistentFileNames: {} };
   for (const pf of sw.persistentFiles) {
     const id = allocateFile(pf.name, pf.size, { persistent: true, swId: sw.id, silent: true });
     if (id === null) {
       log(`INSTALL FAILED: disk full for ${sw.name}`, 'err');
       return false;
     }
-    sw.persistentFileIds[pf.key] = id;
+    sw.persistentFileNames[pf.key] = pf.name;
   }
   installedSoftware[sw.id] = sw;
   swInstances[sw.id] = [];
@@ -1237,25 +1230,38 @@ function installSoftware(swDef) {
   return true;
 }
 
+/**
+ * Generate an instance-scoped unique filename for a temp file.
+ * e.g. name='SORT_TMP.DAT', instId=3 → 'SRT3_1.DAT' (short & unique)
+ * We use a counter per instance to allow multiple tmps per instance.
+ */
+function makeTempName(baseName, instId, counter) {
+  // Split at last dot
+  const dot = baseName.lastIndexOf('.');
+  const ext  = dot >= 0 ? baseName.slice(dot) : '';
+  // Max 8.3 — keep up to 4 chars of base + instId + counter
+  const base = (dot >= 0 ? baseName.slice(0, dot) : baseName).slice(0, 4);
+  return `${base}${instId}_${counter}${ext}`;
+}
+
 async function runSoftware(swId) {
   const sw = installedSoftware[swId];
   if (!sw) return;
 
-  // Check RAM — soft abort (no crash, no reinstall needed)
   if (getRamFree() < sw.ramReq) {
     log(`${sw.name}: NOT ENOUGH RAM (need ${sw.ramReq} KB, free: ${getRamFree()} KB)`, 'warn');
     return;
   }
 
-  // Create a new instance
   const inst = {
     id: nextInstanceId++,
-    running: true,
-    crashed: false,
-    stopRequested: false,
-    stepIndex: 0,
-    progress: 0,
-    tmpFiles: {},
+    running: true, crashed: false, stopRequested: false,
+    stepIndex: 0, progress: 0,
+    // tmpFileNames: tmpKey -> actual filename used by this instance
+    tmpFileNames: {},
+    tmpCounter: 0,
+    // open handles held by this instance: key -> handle  (persistent or tmp)
+    openHandles: {},
     stack: [],
   };
   swInstances[swId].push(inst);
@@ -1279,8 +1285,7 @@ async function runSoftware(swId) {
         log(`${sw.name} #${inst.id}: CRASH — ${e.message}`, 'crash');
         inst.running = false;
         inst.crashed = true;
-        for (const k of Object.keys(inst.tmpFiles)) { if (inst.tmpFiles[k]) deleteFile(inst.tmpFiles[k]); }
-        inst.tmpFiles = {};
+        await cleanupInstance(inst);
         setTimeout(() => {
           const arr = swInstances[swId];
           if (arr) { const idx = arr.indexOf(inst); if (idx !== -1) arr.splice(idx, 1); }
@@ -1294,11 +1299,7 @@ async function runSoftware(swId) {
       await sleep(50);
 
       if (signal === 'exit') break;
-      if (signal === 'skip') {
-        i += 2; // skip next op
-      } else {
-        i++;
-      }
+      if (signal === 'skip') { i += 2; } else { i++; }
     }
 
     if (inst.stopRequested) break;
@@ -1311,260 +1312,214 @@ async function runSoftware(swId) {
 
   } while (sw.isServer && inst.running && !inst.stopRequested);
 
-  // Clean up
-  for (const k of Object.keys(inst.tmpFiles)) { if (inst.tmpFiles[k]) deleteFile(inst.tmpFiles[k]); }
-  inst.tmpFiles = {};
+  await cleanupInstance(inst);
   inst.running = false;
   inst.progress = 0;
-  // Remove from instances array
   const arr = swInstances[swId];
   if (arr) { const idx = arr.indexOf(inst); if (idx !== -1) arr.splice(idx, 1); }
   log(`${sw.name} #${inst.id}: completed`, 'action');
   render();
 }
 
-// Resolve a (rawOffset, rawSize) pair against a file of `len` blocks into
-// a concrete [offset, count] slice.  Used by readFileFid and truncateFileFid.
-function resolveRange(len, rawOffset, rawSize) {
-  const offset = rawOffset < 0
-    ? Math.max(0, len + Math.round(rawOffset))
-    : Math.min(Math.round(rawOffset), len);
-  let count;
-  if (rawSize == null) {
-    count = len - offset;
-  } else if (rawSize < 0) {
-    count = Math.max(0, (len - offset) + Math.round(rawSize) + 1);
-  } else {
-    count = Math.min(Math.round(rawSize), len - offset);
+/** Close all open handles and delete all remaining temp files for an instance. */
+async function cleanupInstance(inst) {
+  // Close all open handles first
+  for (const [key, handle] of Object.entries(inst.openHandles)) {
+    if (handle && handle.fid != null) closeFile(handle);
   }
-  return { offset, count };
-}
+  inst.openHandles = {};
 
-// Seek the read head across a contiguous range of a file's blocks.
-async function readFileFid(fid, rawOffset, rawSize) {
-  const f = files[fid];
-  if (!f || f.blocks.length === 0) return;
-  const { offset, count } = resolveRange(f.blocks.length, rawOffset ?? 0, rawSize ?? null);
-  for (let i = 0; i < count; i++) {
-    await readBlock(f.blocks[offset + i]);
+  // Delete any leftover temp files (they may be pending-delete now — that's fine)
+  for (const [tmpKey, tmpName] of Object.entries(inst.tmpFileNames)) {
+    const fid = findFileByName(tmpName);
+    if (fid !== null) {
+      const f = files[fid];
+      if (f && f.blocks.length > 0) await writeBlock(f.blocks[0]).catch(() => {});
+      deleteFile(fid);
+    }
   }
+  inst.tmpFileNames = {};
 }
 
-// Write-head sweep over blocks [prevLen .. end] of a file (newly allocated blocks).
-async function writeNewBlocks(fid, prevLen) {
-  const f = files[fid];
-  for (let i = prevLen; i < f.blocks.length; i++) {
-    await writeBlock(f.blocks[i]);
+/** Resolve an op's file reference to a fid. op must specify either file (persistent key) or tmpKey. */
+function resolveOpFid(sw, inst, op) {
+  if (op.file) {
+    const name = sw.persistentFileNames[op.file];
+    if (!name) throw new Error(`persistent key '${op.file}' not registered`);
+    const fid = findFileByName(name);
+    if (fid === null) throw new Error(`persistent file '${name}' not found on disk`);
+    return fid;
   }
-}
-
-// Grow a file by `size` blocks and sweep the write head across the new blocks.
-async function appendFileAndWrite(fid, size) {
-  const prevLen = files[fid].blocks.length;
-  if (!appendFile(fid, size)) throw new Error('disk full during append');
-  await writeNewBlocks(fid, prevLen);
-}
-
-// Signal a file deletion by touching its first block with the write head, then free it.
-async function deleteFileAndWrite(fid) {
-  const f = files[fid];
-  if (f && f.blocks.length > 0) await writeBlock(f.blocks[0]);
-  deleteFile(fid);
-}
-
-// Free a range of a file's blocks (write head to each, then splice from block list).
-// Returns the number of freed blocks.
-async function truncateFileFid(fid, rawOffset, rawSize) {
-  const f = files[fid];
-  const { offset, count } = resolveRange(f.blocks.length, rawOffset, rawSize);
-  for (let ti = offset; ti < offset + count; ti++) {
-    const blockIdx = f.blocks[ti];
-    if (blockIdx === undefined) continue;
-    await writeBlock(blockIdx);
-    disk[blockIdx] = null;
+  if (op.tmpKey) {
+    const name = inst.tmpFileNames[op.tmpKey];
+    if (!name) throw new Error(`tmpKey '${op.tmpKey}' not yet created`);
+    const fid = findFileByName(name);
+    if (fid === null) throw new Error(`temp file '${name}' not found on disk`);
+    return fid;
   }
-  f.blocks.splice(offset, count);
-  f.size = f.blocks.length;
-  f.modified = Date.now();
-  return count;
+  throw new Error(`op missing file or tmpKey`);
+}
+
+/** Acquire an open handle for a file, reusing any already-open handle for this key. */
+function ensureOpen(inst, key, fid) {
+  if (inst.openHandles[key] && inst.openHandles[key].fid != null) {
+    return inst.openHandles[key];
+  }
+  const handle = openFileById(fid, { allowPending: false });
+  inst.openHandles[key] = handle;
+  return handle;
+}
+
+function releaseHandle(inst, key) {
+  const h = inst.openHandles[key];
+  if (h) { closeFile(h); delete inst.openHandles[key]; }
 }
 
 async function executeSoftwareOp(sw, inst, op) {
   switch(op.op) {
-    case 'read': {
-      let fid;
-      if (op.file) {
-        fid = sw.persistentFileIds[op.file];
-      } else {
-        const keys = Object.keys(inst.tmpFiles);
-        if (keys.length === 0) throw new Error('no file to read');
-        fid = inst.tmpFiles[keys[keys.length - 1]];
-      }
-      if (!files[fid]) throw new Error(`file ${op.file || '(tmp)'} missing`);
-      await readFileFid(fid, op.offset, op.size);
-      break;
-    }
-    case 'create': {
-      const name = op.name || 'TMP.DAT';
-      const size = op.size || 4;
-      const fid = allocateFile(name, size, { silent: true, swId: sw.id });
-      if (fid === null) throw new Error('disk full');
-      inst.tmpFiles[op.which || name] = fid;
-      await writeNewBlocks(fid, 0);
-      break;
-    }
-    case 'append': {
-      let fid;
-      if (op.file) {
-        fid = sw.persistentFileIds[op.file];
-      } else {
-        const keys = Object.keys(inst.tmpFiles);
-        if (keys.length === 0) throw new Error('no tmp file to append');
-        fid = inst.tmpFiles[keys[keys.length - 1]];
-      }
-      if (!files[fid]) throw new Error('target file missing');
-      await appendFileAndWrite(fid, op.size || 2);
-      break;
-    }
-    case 'delete': {
-      let fid;
-      if (op.which) {
-        fid = inst.tmpFiles[op.which];
-      } else if (op.file) {
-        fid = sw.persistentFileIds[op.file];
-      } else {
-        const keys = Object.keys(inst.tmpFiles);
-        if (keys.length === 0) return;
-        const k = keys[keys.length - 1];
-        fid = inst.tmpFiles[k];
-        delete inst.tmpFiles[k];
-      }
-      if (fid && files[fid]) {
-        const keyEntry = Object.entries(inst.tmpFiles).find(([k, v]) => v === fid);
-        if (keyEntry) delete inst.tmpFiles[keyEntry[0]];
-        await deleteFileAndWrite(fid);
-      }
-      break;
-    }
-    case 'truncate': {
-      let fid;
-      if (op.file) {
-        fid = sw.persistentFileIds[op.file];
-      } else {
-        const keys = Object.keys(inst.tmpFiles);
-        if (keys.length === 0) throw new Error('truncate: no file to truncate');
-        fid = inst.tmpFiles[keys[keys.length - 1]];
-      }
-      if (!files[fid]) throw new Error(`truncate: file ${op.file || '(tmp)'} missing`);
 
-      // offset: op arg takes priority, else pop from stack
+    case 'read': {
+      const fid = resolveOpFid(sw, inst, op);
+      const key = op.file || op.tmpKey;
+      ensureOpen(inst, key, fid);
+      await readFileFid(fid, op.offset, op.size);
+      releaseHandle(inst, key);
+      break;
+    }
+
+    case 'create': {
+      if (!op.tmpKey) throw new Error('create op must have tmpKey');
+      // Generate an instance-scoped unique name
+      const counter = ++inst.tmpCounter;
+      const uniqueName = makeTempName(op.name || 'TMP.DAT', inst.id, counter);
+      inst.tmpFileNames[op.tmpKey] = uniqueName;
+      const fid = allocateFile(uniqueName, op.size || 4, { silent: true, swId: sw.id });
+      if (fid === null) throw new Error(`disk full creating ${uniqueName}`);
+      const handle = openFileById(fid);
+      inst.openHandles[op.tmpKey] = handle;
+      await writeNewBlocks(fid, 0);
+      releaseHandle(inst, op.tmpKey);
+      break;
+    }
+
+    case 'append': {
+      const fid = resolveOpFid(sw, inst, op);
+      const key = op.file || op.tmpKey;
+      ensureOpen(inst, key, fid);
+      await appendFileAndWrite(fid, op.size || 2);
+      releaseHandle(inst, key);
+      break;
+    }
+
+    case 'delete': {
+      if (!op.tmpKey) throw new Error('delete op must have tmpKey');
+      releaseHandle(inst, op.tmpKey); // close before delete
+      const name = inst.tmpFileNames[op.tmpKey];
+      if (!name) break; // already gone
+      const fid = findFileByName(name);
+      if (fid !== null) {
+        const f = files[fid];
+        if (f && f.blocks.length > 0) await writeBlock(f.blocks[0]);
+        deleteFile(fid);
+      }
+      delete inst.tmpFileNames[op.tmpKey];
+      break;
+    }
+
+    case 'truncate': {
+      const fid = resolveOpFid(sw, inst, op);
+      const key = op.file || op.tmpKey;
+      ensureOpen(inst, key, fid);
+
       let rawOffset;
-      if (op.offset != null) {
-        rawOffset = op.offset;
-      } else {
+      if (op.offset != null) { rawOffset = op.offset; }
+      else {
         if (inst.stack.length === 0) throw new Error('truncate: stack underflow (offset)');
         rawOffset = inst.stack.pop();
       }
 
-      // size: op arg takes priority, null means "rest of file", else pop from stack
       let rawSize;
-      if (op.size != null) {
-        rawSize = op.size;
-      } else if (op.size === null) {
-        rawSize = null;
-      } else {
+      if (op.size !== undefined && op.size !== null) { rawSize = op.size; }
+      else if (op.size === null) { rawSize = null; }
+      else {
         if (inst.stack.length === 0) throw new Error('truncate: stack underflow (size)');
         rawSize = inst.stack.pop();
       }
 
       inst.stack.push(await truncateFileFid(fid, rawOffset, rawSize));
+      releaseHandle(inst, key);
       break;
     }
-    case 'push': {
-      inst.stack.push(op.value);
-      break;
-    }
+
+    case 'push':        { inst.stack.push(op.value); break; }
+
     case 'push_size': {
-      let fid;
-      if (op.file) {
-        fid = sw.persistentFileIds[op.file];
-      } else {
-        const keys = Object.keys(inst.tmpFiles);
-        if (keys.length === 0) throw new Error('push_size: no file to measure');
-        fid = inst.tmpFiles[keys[keys.length - 1]];
-      }
-      if (!files[fid]) throw new Error(`push_size: file ${op.file || '(tmp)'} missing`);
+      const fid = resolveOpFid(sw, inst, op);
+      if (!files[fid]) throw new Error(`push_size: file not found`);
       inst.stack.push(files[fid].blocks.length);
       break;
     }
+
     case 'push_random': {
-      const lo = op.min != null ? op.min : 0;
-      const hi = op.max != null ? op.max : 1;
+      const lo = op.min ?? 0, hi = op.max ?? 1;
       inst.stack.push(lo + Math.random() * (hi - lo));
       break;
     }
-    case 'dup': {
-      if (inst.stack.length === 0) throw new Error('dup: stack underflow');
-      const top = inst.stack[inst.stack.length - 1];
-      inst.stack.push(top);
-      break;
-    }
+
     case 'pop': {
       if (inst.stack.length === 0) throw new Error('pop: stack underflow');
-      inst.stack.pop();
-      break;
+      inst.stack.pop(); break;
     }
-    case 'exit': {
-      return 'exit';
+
+    case 'dup': {
+      if (inst.stack.length === 0) throw new Error('dup: stack underflow');
+      inst.stack.push(inst.stack[inst.stack.length-1]); break;
     }
-    case 'crash': {
-      throw new Error(op.message || 'forced crash');
-    }
+
     case 'calc': {
       if (inst.stack.length < 2) throw new Error('calc: stack underflow');
-      const b = inst.stack.pop();
-      const a = inst.stack.pop();
-      const op2 = op.op2 || 'add';
-      let result;
-      if      (op2 === 'add') result = a + b;
-      else if (op2 === 'sub') result = a - b;
-      else if (op2 === 'mul') result = a * b;
-      else if (op2 === 'div') {
-        if (b === 0) throw new Error('calc: division by zero');
-        result = a / b;
-      }
-      else throw new Error(`calc: unknown op '${op2}'`);
-      inst.stack.push(result);
+      const b = inst.stack.pop(), a = inst.stack.pop();
+      const o2 = op.op2 || 'add';
+      if      (o2==='add') inst.stack.push(a+b);
+      else if (o2==='sub') inst.stack.push(a-b);
+      else if (o2==='mul') inst.stack.push(a*b);
+      else if (o2==='div') { if (b===0) throw new Error('div by zero'); inst.stack.push(a/b); }
+      else throw new Error(`calc: unknown op '${o2}'`);
       break;
     }
+
     case 'compare': {
       if (inst.stack.length < 2) throw new Error('compare: stack underflow');
-      const b = inst.stack.pop();
-      const a = inst.stack.pop();
+      const b = inst.stack.pop(), a = inst.stack.pop();
       const cmp = op.cmp || 'eq';
-      let result;
-      if      (cmp === 'eq')  result = a === b;
-      else if (cmp === 'neq') result = a !== b;
-      else if (cmp === 'lt')  result = a < b;
-      else if (cmp === 'lte') result = a <= b;
-      else if (cmp === 'gt')  result = a > b;
-      else if (cmp === 'gte') result = a >= b;
-      else throw new Error(`compare: unknown cmp '${cmp}'`);
+      const result =
+        cmp==='eq'  ? a===b :
+        cmp==='neq' ? a!==b :
+        cmp==='lt'  ? a<b   :
+        cmp==='lte' ? a<=b  :
+        cmp==='gt'  ? a>b   :
+        cmp==='gte' ? a>=b  :
+        (() => { throw new Error(`compare: unknown cmp '${cmp}'`); })();
       inst.stack.push(result ? 1 : 0);
       break;
     }
+
     case 'if': {
       if (inst.stack.length === 0) throw new Error('if: stack underflow');
       const val = inst.stack.pop();
       if (!val) return 'skip';
       break;
     }
+
+    case 'exit': return 'exit';
+
+    case 'crash': throw new Error(op.message || 'forced crash');
+
     case 'earn': {
       let amount;
-      if (op.amount != null) {
-        amount = op.amount;
-      } else {
-        if (inst.stack.length === 0) throw new Error('earn: stack underflow (no amount)');
+      if (op.amount != null) { amount = op.amount; }
+      else {
+        if (inst.stack.length === 0) throw new Error('earn: stack underflow');
         amount = inst.stack.pop();
       }
       amount = Math.round(amount * 100) / 100;
@@ -1581,7 +1536,6 @@ function stopSoftware(swId, instId) {
     const inst = instances.find(i => i.id === instId);
     if (inst) inst.stopRequested = true;
   } else {
-    // Stop all instances
     for (const inst of instances) inst.stopRequested = true;
   }
 }
@@ -1589,19 +1543,17 @@ function stopSoftware(swId, instId) {
 function reinstallSoftware(swId) {
   const sw = installedSoftware[swId];
   if (!sw) return;
-  // Stop any running instances first
   stopSoftware(swId);
   log(`Reinstalling ${sw.name}...`, 'warn');
-  // Delete old persistent files
-  for (const [key, fid] of Object.entries(sw.persistentFileIds)) {
-    if (files[fid]) deleteFile(fid);
+  for (const [key, name] of Object.entries(sw.persistentFileNames)) {
+    const fid = findFileByName(name);
+    if (fid !== null) deleteFile(fid);
   }
-  sw.persistentFileIds = {};
-  // Recreate
+  sw.persistentFileNames = {};
   for (const pf of sw.persistentFiles) {
     const id = allocateFile(pf.name, pf.size, { persistent: true, swId: sw.id, silent: true });
     if (id === null) { log(`REINSTALL FAILED: disk full`, 'err'); return; }
-    sw.persistentFileIds[pf.key] = id;
+    sw.persistentFileNames[pf.key] = pf.name;
   }
   swInstances[swId] = [];
   log(`${sw.name}: reinstalled`, 'action');
@@ -1629,10 +1581,8 @@ function showMoneyAnim(amount) {
   const el = document.createElement('div');
   el.className = 'money-earn-anim';
   el.textContent = `+$${amount.toFixed(2)}`;
-  const x = 60 + Math.random() * 100;
-  const y = 30 + Math.random() * 30;
-  el.style.left = x + 'px';
-  el.style.top = y + 'px';
+  el.style.left = (60 + Math.random()*100) + 'px';
+  el.style.top  = (30 + Math.random()*30)  + 'px';
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 1600);
 }
@@ -1654,18 +1604,11 @@ function buyShopItem(itemId) {
   }
   if (!spendMoney(item.price)) { log(`Not enough money for ${item.name}`, 'err'); return; }
   item.bought = true;
-  if (item.type === 'hdd') {
-    expandDisk(item.value);
-  } else if (item.type === 'ram') {
-    RAM_SIZE = item.value;
-    log(`RAM upgraded to ${RAM_SIZE} KB`, 'action');
-  } else if (item.type === 'rhead') {
-    addReadHead();
-  } else if (item.type === 'whead') {
-    addWriteHead();
-  }
-  renderShop();
-  renderStats();
+  if      (item.type==='hdd')   expandDisk(item.value);
+  else if (item.type==='ram')   { RAM_SIZE = item.value; log(`RAM upgraded to ${RAM_SIZE} KB`, 'action'); }
+  else if (item.type==='rhead') addReadHead();
+  else if (item.type==='whead') addWriteHead();
+  renderShop(); renderStats();
 }
 
 function expandDisk(newSize) {
@@ -1675,7 +1618,6 @@ function expandDisk(newSize) {
   disk.length = DISK_SIZE;
   for (let i = old; i < DISK_SIZE; i++) disk[i] = null;
   log(`HDD expanded to ${DISK_SIZE} blocks!`, 'action');
-  document.querySelector('.header .subtitle').textContent = `MIRACULOUS DISK DEFRAGMENTER — C:\\ DRIVE — ${DISK_SIZE} BLOCKS`;
 }
 
 function buySoftware(swId) {
@@ -1697,51 +1639,25 @@ function buySoftware(swId) {
   document.getElementById('disk-map').addEventListener('mouseover', e => {
     const block = e.target.closest('[data-block]');
     if (!block || !block.dataset.tip) { tooltip.style.display = 'none'; return; }
-
     tooltip.textContent = block.dataset.tip;
     tooltip.style.display = 'block';
-
     const map = document.getElementById('disk-map');
     const mapRect = map.getBoundingClientRect();
     const blockRect = block.getBoundingClientRect();
-    const tipW = tooltip.offsetWidth;
-    const tipH = tooltip.offsetHeight;
-
+    const tipW = tooltip.offsetWidth, tipH = tooltip.offsetHeight;
     const blockIdx = parseInt(block.dataset.block);
-    const col = blockIdx % COLS;
-    const row = Math.floor(blockIdx / COLS);
-
-    // Vertical: first row → below block, otherwise above
-    let top;
-    if (row === 0) {
-      top = blockRect.bottom + 2;
-    } else {
-      top = blockRect.top - tipH - 2;
-    }
-
-    // Horizontal: interpolate anchor from left edge (col=0) to right edge (col=COLS-1)
-    // At col=0: tooltip left edge aligns with block left edge (touches left boundary)
-    // At col=COLS-1: tooltip right edge aligns with block right edge (touches right boundary)
-    // In between: linearly interpolate the anchor point across the tooltip width
-    const t = (COLS <= 1) ? 0 : col / (COLS - 1); // 0..1
-    // anchorX is the x position within the tooltip that aligns to the block center
-    // at t=0: anchorX=0 (left edge of tooltip at block center)
-    // at t=1: anchorX=tipW (right edge of tooltip at block center)
+    const col = blockIdx % COLS, row = Math.floor(blockIdx / COLS);
+    let top = (row === 0) ? blockRect.bottom + 2 : blockRect.top - tipH - 2;
+    const t = (COLS <= 1) ? 0 : col / (COLS - 1);
     const blockCenterX = blockRect.left + blockRect.width / 2;
-    const anchorX = t * tipW;
-    let left = blockCenterX - anchorX;
-
-    // Clamp so tooltip stays within the map horizontally
+    let left = blockCenterX - t * tipW;
     left = Math.max(mapRect.left, Math.min(left, mapRect.right - tipW));
-
     tooltip.style.left = left + 'px';
-    tooltip.style.top = top + 'px';
+    tooltip.style.top  = top  + 'px';
   });
 
   document.getElementById('disk-map').addEventListener('mouseout', e => {
-    if (!e.relatedTarget || !e.relatedTarget.closest('[data-block]')) {
-      tooltip.style.display = 'none';
-    }
+    if (!e.relatedTarget || !e.relatedTarget.closest('[data-block]')) tooltip.style.display = 'none';
   });
 })();
 
@@ -1750,36 +1666,50 @@ function buySoftware(swId) {
 // ==========================================
 function opCreate() {
   const name = (document.getElementById('in-filename').value.trim() || 'FILE.DAT').toUpperCase();
-  const size = parseInt(document.getElementById('in-size').value) || 8;
+  const size  = parseInt(document.getElementById('in-size').value) || 8;
   allocateFile(name, size);
   render();
 }
+
 function opDelete() {
   if (!selectedFileId || selectedFileId === 0) { log('No file selected', 'warn'); return; }
   const f = files[selectedFileId];
   if (!f) return;
-  const name = f.name;
+  if (f.persistent) { log(`Cannot delete ${f.name}: software file`, 'warn'); return; }
+  log(`Deleted ${f.name}`, 'action');
   deleteFile(selectedFileId);
-  log(`Deleted ${name}`, 'action');
   render();
 }
+
 function opAppend() {
   if (!selectedFileId) { log('No file selected', 'warn'); return; }
+  const f = files[selectedFileId];
+  if (!f) return;
+  if (f.openCount > 0) { log(`${f.name} is open — cannot append manually`, 'warn'); return; }
   const extra = parseInt(document.getElementById('in-size').value) || 4;
   appendFile(selectedFileId, extra);
-  log(`Appended ${extra} blocks to ${files[selectedFileId]?.name}`, 'action');
+  log(`Appended ${extra} blocks to ${f.name}`, 'action');
   render();
 }
+
 function opRename() {
   if (!selectedFileId) { log('No file selected', 'warn'); return; }
+  const f = files[selectedFileId];
+  if (!f) return;
   const newName = document.getElementById('in-filename').value.trim().toUpperCase();
-  files[selectedFileId].name = newName;
-  files[selectedFileId].modified = Date.now();
+  if (filesByName[newName] !== undefined) { log(`Name '${newName}' already in use`, 'err'); return; }
+  if (f.openCount > 0) { log(`${f.name} is open — cannot rename`, 'warn'); return; }
+  delete filesByName[f.name];
+  f.name = newName;
+  f.modified = Date.now();
+  filesByName[newName] = selectedFileId;
   log(`Renamed to ${newName}`, 'action');
   render();
 }
+
 function opModify() {
   if (!selectedFileId) { log('No file selected', 'warn'); return; }
+  if (!files[selectedFileId]) return;
   files[selectedFileId].modified = Date.now();
   log(`Modified ${files[selectedFileId].name}`, 'action');
   render();
@@ -1787,41 +1717,143 @@ function opModify() {
 
 const adjectives = ['ALPHA','BETA','GAMMA','DATA','TEMP','CACHE','USER','APP','LOG','IMG','VID','DOC','SYS','NET','BIN','LIB'];
 const exts = ['DAT','TMP','LOG','BMP','WAV','TXT','DB','CAB'];
-function rndName() { return adjectives[Math.floor(Math.random()*adjectives.length)] + Math.floor(Math.random()*999) + '.' + exts[Math.floor(Math.random()*exts.length)]; }
+function rndName() {
+  let name, attempts = 0;
+  do {
+    name = adjectives[Math.floor(Math.random()*adjectives.length)]
+         + Math.floor(Math.random()*999) + '.'
+         + exts[Math.floor(Math.random()*exts.length)];
+    attempts++;
+  } while (filesByName[name] !== undefined && attempts < 100);
+  return name;
+}
 function rndSize(min=3, max=20) { return min + Math.floor(Math.random()*(max-min)); }
 
 function bulkCreate() {
   const count = parseInt(document.getElementById('in-bulk-count').value) || 10;
-  for (let i = 0; i < count; i++) allocateFile(rndName(), rndSize(2, 18), {silent:true});
-  log(`Bulk created ${count} files`, 'warn');
+  let created = 0;
+  for (let i = 0; i < count; i++) {
+    if (allocateFile(rndName(), rndSize(2, 18), {silent:true})) created++;
+  }
+  log(`Bulk created ${created} files`, 'warn');
   render();
 }
+
 function bulkDeleteRandom() {
   const count = parseInt(document.getElementById('in-bulk-count').value) || 5;
-  const ids = Object.keys(files).map(Number).filter(id => id !== 0 && !files[id].persistent);
+  const ids = Object.keys(files).map(Number).filter(id => id !== 0 && !files[id].persistent && files[id].openCount === 0);
+  let deleted = 0;
   for (let i = 0; i < count && ids.length > 0; i++) {
-    const idx = Math.floor(Math.random() * ids.length);
+    const idx = Math.floor(Math.random()*ids.length);
     deleteFile(ids.splice(idx, 1)[0]);
+    deleted++;
   }
-  log(`Bulk deleted up to ${count} files`, 'warn');
+  log(`Bulk deleted ${deleted} files`, 'warn');
   render();
 }
+
 function bulkCreateDelete() {
   const count = parseInt(document.getElementById('in-bulk-count').value) || 8;
   const created = [];
-  for (let i = 0; i < count; i++) created.push(allocateFile(rndName(), rndSize(2, 12), {silent:true}));
+  for (let i = 0; i < count; i++) created.push(allocateFile(rndName(), rndSize(2,12), {silent:true}));
   for (let i = 0; i < created.length; i += 2) { if (created[i]) deleteFile(created[i]); }
-  for (let i = 0; i < Math.ceil(count/2); i++) allocateFile(rndName(), rndSize(8, 20), {silent:true});
+  for (let i = 0; i < Math.ceil(count/2); i++) allocateFile(rndName(), rndSize(8,20), {silent:true});
   log(`Create+Delete cycle done — fragmentation increased!`, 'warn');
   render();
 }
+
 function bulkAppendAll() {
-  const ids = Object.keys(files).map(Number).filter(id => id !== 0);
-  for (const id of ids) {
-    const extra = rndSize(1, 5);
-    appendFile(id, extra);
-  }
+  const ids = Object.keys(files).map(Number).filter(id => id !== 0 && files[id].openCount === 0);
+  for (const id of ids) appendFile(id, rndSize(1,5));
   log(`Appended to all files — heavy fragmentation!`, 'warn');
+  render();
+}
+
+// ==========================================
+// CHKDSK — validates both disk blocks and file integrity
+// ==========================================
+function toggleChkdsk() {
+  if (chkdskRunning) { chkdskStopRequested = true; }
+  else { runChkdsk(); }
+}
+
+async function runChkdsk() {
+  if (chkdskRunning) return;
+  chkdskRunning = true;
+  chkdskStopRequested = false;
+  const btn = document.getElementById('btn-chkdsk');
+  btn.textContent = '■ STOP CHKDSK';
+  btn.classList.add('danger');
+  log('CHKDSK: Starting disk scan...', 'warn');
+
+  let orphanFixed = 0, crossLinked = 0, fileMissing = 0;
+
+  // Phase 1: Build a reference map — which fid should own each block according to files[]
+  const expectedOwner = new Array(DISK_SIZE).fill(null);
+  for (const [idStr, f] of Object.entries(files)) {
+    const id = parseInt(idStr);
+    for (const b of f.blocks) {
+      if (b < 0 || b >= DISK_SIZE) continue;
+      if (expectedOwner[b] !== null && expectedOwner[b] !== id) {
+        // Cross-link: two files claim the same block
+        log(`CHKDSK: Block ${b} claimed by both #${expectedOwner[b]} and #${id} — cross-link!`, 'err');
+        crossLinked++;
+      }
+      expectedOwner[b] = id;
+    }
+  }
+
+  // Phase 2: Check files for blocks that disk[] disagrees with
+  log('CHKDSK: Phase 1 — checking file block associations...', 'defrag');
+  for (const [idStr, f] of Object.entries(files)) {
+    if (chkdskStopRequested) break;
+    const id = parseInt(idStr);
+    const badBlocks = [];
+    for (let bi = 0; bi < f.blocks.length; bi++) {
+      const b = f.blocks[bi];
+      if (b < 0 || b >= DISK_SIZE || disk[b] !== id) {
+        badBlocks.push(bi);
+      }
+    }
+    if (badBlocks.length > 0) {
+      log(`CHKDSK: ${f.name} has ${badBlocks.length} mismatched block(s) — removing`, 'err');
+      // Remove bad indices from file (in reverse to preserve indices)
+      for (let bi = badBlocks.length - 1; bi >= 0; bi--) {
+        f.blocks.splice(badBlocks[bi], 1);
+      }
+      f.size = f.blocks.length;
+      fileMissing += badBlocks.length;
+    }
+    await sleep(0);
+  }
+
+  // Phase 3: Scan disk[] for blocks pointing to non-existent files
+  log('CHKDSK: Phase 2 — scanning for orphaned blocks...', 'defrag');
+  for (let i = 0; i < DISK_SIZE; i++) {
+    if (chkdskStopRequested) break;
+    const id = disk[i];
+    if (id !== null && id !== 0 && !files[id]) {
+      await readBlock(i);
+      if (chkdskStopRequested) { disk[i] = null; orphanFixed++; render(); break; }
+      await writeBlock(i);
+      disk[i] = null;
+      orphanFixed++;
+      render();
+    }
+    if (i % 16 === 0) await sleep(0);
+  }
+
+  const stopped = chkdskStopRequested;
+  let summary = `CHKDSK: Complete. Orphans: ${orphanFixed}`;
+  if (crossLinked) summary += `, Cross-links detected: ${crossLinked}`;
+  if (fileMissing) summary += `, Bad file blocks cleaned: ${fileMissing}`;
+  log(summary, (orphanFixed + crossLinked + fileMissing) > 0 ? 'warn' : 'defrag');
+  if (stopped) log('CHKDSK: Stopped early by user.', 'warn');
+
+  chkdskRunning = false;
+  chkdskStopRequested = false;
+  btn.textContent = '▶ CHKDSK';
+  btn.classList.remove('danger');
   render();
 }
 
@@ -1853,24 +1885,23 @@ function renderDiskMap() {
         } else {
           selectedFileId = null;
         }
-        renderDiskMap();
-        renderFileList();
+        renderDiskMap(); renderFileList();
       });
     }
     const id = disk[i];
     if (id === null) {
       el.className = 'block free';
-      el.style.background = '';
-      el.style.border = '';
-      el.style.filter = '';
-      el.style.outline = '';
+      el.style.background = ''; el.style.border = ''; el.style.filter = ''; el.style.outline = '';
       el.dataset.tip = `Block ${i}: FREE`;
     } else {
       el.className = 'block used';
       const f = files[id];
-      el.style.background = f ? f.color : '#444';
+      el.style.background = f ? f.color : '#333';
       el.style.border = 'none';
-      el.dataset.tip = f ? `Block ${i}: ${f.name}` : `Block ${i}`;
+      let tip = f ? `Block ${i}: ${f.name}` : `Block ${i}: ORPHAN`;
+      if (f && f.openCount > 0) tip += ` [open:${f.openCount}]`;
+      if (f && f.pendingDelete) tip += ` [PENDING-DEL]`;
+      el.dataset.tip = tip;
       if (id === selectedFileId) { el.style.filter = 'brightness(1.8)'; el.style.outline = '1px solid white'; }
       else { el.style.filter = ''; el.style.outline = ''; }
     }
@@ -1878,8 +1909,6 @@ function renderDiskMap() {
   }
   map.innerHTML = '';
   map.appendChild(frag);
-
-  // Reapply head highlights (lost when DOM is rebuilt)
   for (const h of readHeads)  updateHeadVisual(h, h.visBlock);
   for (const h of writeHeads) updateHeadVisual(h, h.visBlock);
 }
@@ -1898,9 +1927,11 @@ function renderFileList() {
     const item = document.createElement('div');
     item.className = 'file-item' + (id === selectedFileId ? ' selected' : '');
     item.onclick = () => { selectedFileId = (selectedFileId === id) ? null : id; render(); };
+    const openBadge = f.openCount > 0 ? ` <span style="color:var(--cyan);font-size:9px">[${f.openCount}]</span>` : '';
+    const pendBadge = f.pendingDelete ? ` <span style="color:var(--red);font-size:9px">[DEL]</span>` : '';
     item.innerHTML = `
       <div class="file-dot" style="background:${f.color}"></div>
-      <span class="file-name" title="${f.name}">${f.name}${f.persistent ? ' 🔒' : ''}</span>
+      <span class="file-name" title="${f.name}">${f.name}${f.persistent ? ' 🔒' : ''}${openBadge}${pendBadge}</span>
       <span class="file-size">${f.blocks.length}b</span>
       <span class="file-frag ${isFrag?'bad':'ok'}">${frags}F</span>
     `;
@@ -1915,61 +1946,44 @@ function renderFileList() {
 function renderStats() {
   const used = disk.filter(x => x !== null).length;
   const free = DISK_SIZE - used;
-  const files_count = Object.keys(files).filter(id => parseInt(id) !== 0).length;
+  const filesCount = Object.keys(files).filter(id => parseInt(id) !== 0).length;
   const frag = getFragmentation();
   const ramUsed = getRamUsed();
 
   document.getElementById('stat-used').textContent = `${used} BLK`;
   document.getElementById('stat-free').textContent = `${free} BLK`;
-  document.getElementById('stat-files').textContent = files_count;
+  document.getElementById('stat-files').textContent = filesCount;
   document.getElementById('stat-capacity').textContent = `${DISK_SIZE} BLK`;
   document.getElementById('stat-ram').textContent = `${RAM_SIZE} KB`;
 
   const rBusy = readHeads.filter(h => h.inUse).length;
   const wBusy = writeHeads.filter(h => h.inUse).length;
-  const rEl = document.getElementById('stat-rheads');
-  const wEl = document.getElementById('stat-wheads');
-  if (rEl) rEl.textContent = `${readHeads.length - rBusy}/${readHeads.length}`;
-  if (wEl) wEl.textContent = `${writeHeads.length - wBusy}/${writeHeads.length}`;
+  const rEl = document.getElementById('stat-rheads'); if (rEl) rEl.textContent = `${readHeads.length-rBusy}/${readHeads.length}`;
+  const wEl = document.getElementById('stat-wheads'); if (wEl) wEl.textContent = `${writeHeads.length-wBusy}/${writeHeads.length}`;
 
   const fragEl = document.getElementById('stat-frag');
   fragEl.textContent = `${frag}%`;
-  fragEl.className = 'stat-value ' + (frag < 20 ? 'good' : frag < 50 ? '' : 'bad');
-  if (frag >= 50) fragEl.style.color = 'var(--red)';
-  else if (frag >= 20) fragEl.style.color = 'var(--amber)';
-  else fragEl.style.color = 'var(--green)';
-
+  fragEl.style.color = frag >= 50 ? 'var(--red)' : frag >= 20 ? 'var(--amber)' : 'var(--green)';
   document.getElementById('frag-meter').style.width = frag + '%';
 
-  // HW panel
   document.getElementById('hw-ram').textContent = `${RAM_SIZE} KB`;
   document.getElementById('hw-ram-used').textContent = `${ramUsed} KB`;
   document.getElementById('hw-hdd').textContent = `${DISK_SIZE} BLK`;
-  const ramPct = RAM_SIZE > 0 ? (ramUsed / RAM_SIZE * 100) : 0;
-  document.getElementById('ram-fill').style.width = `${ramPct}%`;
-  const hwRh = document.getElementById('hw-rheads');
-  const hwWh = document.getElementById('hw-wheads');
-  if (hwRh) hwRh.textContent = readHeads.length;
-  if (hwWh) hwWh.textContent = writeHeads.length;
+  document.getElementById('ram-fill').style.width = `${RAM_SIZE > 0 ? ramUsed/RAM_SIZE*100 : 0}%`;
+  const hwRh = document.getElementById('hw-rheads'); if (hwRh) hwRh.textContent = readHeads.length;
+  const hwWh = document.getElementById('hw-wheads'); if (hwWh) hwWh.textContent = writeHeads.length;
 }
 
 function renderSoftwareList() {
   const el = document.getElementById('software-list');
   const ids = Object.keys(installedSoftware);
-  if (ids.length === 0) {
-    el.innerHTML = '<div style="color:var(--green-dim);font-size:11px">No software installed</div>';
-    return;
-  }
-
-  for (const id of ids) {
-    renderSoftwareCard(id, el);
-  }
+  if (ids.length === 0) { el.innerHTML = '<div style="color:var(--green-dim);font-size:11px">No software installed</div>'; return; }
+  for (const id of ids) renderSoftwareCard(id, el);
 }
 
 function renderSoftwareCard(swId, container) {
   const sw = installedSoftware[swId];
   if (!sw) return;
-
   const instances = swInstances[swId] || [];
   const anyRunning = instances.some(i => i.running);
   const anyCrashed = instances.some(i => i.crashed);
@@ -1982,7 +1996,7 @@ function renderSoftwareCard(swId, container) {
     card.innerHTML = `
       <div class="sw-header">
         <span class="sw-name" data-role="name">${sw.name}</span>
-        <span class="sw-badge ${sw.badgeType}" data-role="badge">${sw.badgeType === 'server' ? '⟳ SERVER' : '▶ PROG'}</span>
+        <span class="sw-badge ${sw.badgeType}" data-role="badge">${sw.badgeType==='server' ? '⟳ SERVER' : '▶ PROG'}</span>
       </div>
       <div class="sw-info" data-role="info"></div>
       <div class="sw-btn-row" data-role="btn-row"></div>
@@ -1991,21 +2005,16 @@ function renderSoftwareCard(swId, container) {
     if (container) container.appendChild(card);
   }
 
-  // Card border state
   card.className = `software-card${anyRunning ? ' running' : ''}${anyCrashed && !anyRunning ? ' crashed' : ''}`;
-
-  // Name style
   const nameEl = card.querySelector('[data-role="name"]');
   nameEl.className = `sw-name ${anyRunning ? 'running-name' : anyCrashed && !anyRunning ? 'crashed-name' : ''}`;
 
-  // Info line
   const infoEl = card.querySelector('[data-role="info"]');
   const runCount = instances.filter(i => i.running).length;
   const infoHtml = `RAM: <span>${sw.ramReq} KB</span> &nbsp; Files: <span>${sw.persistentFiles.length}</span>`
     + (runCount > 0 ? ` &nbsp; <span style="color:var(--cyan)">×${runCount} running</span>` : '');
   if (infoEl.innerHTML !== infoHtml) infoEl.innerHTML = infoHtml;
 
-  // RUN / STOP-ALL / REINSTALL buttons
   const btnRow = card.querySelector('[data-role="btn-row"]');
   const canRun = getRamFree() >= sw.ramReq;
   const existingBtn = btnRow.querySelector('button');
@@ -2014,32 +2023,27 @@ function renderSoftwareCard(swId, container) {
   let neededRole, neededHtml;
   if (anyRunning && sw.isServer) {
     neededRole = anyCrashed ? 'run-server-crash' : 'run-server';
-    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ ADD INSTANCE</button>
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun?'':'disabled'}>▶ ADD INSTANCE</button>
                   <button class="btn stop-btn sw-btn" onclick="stopSoftware('${swId}')">■ STOP ALL</button>`
                   + (anyCrashed ? `<button class="btn danger sw-btn" onclick="reinstallSoftware('${swId}')">↺ REINSTALL</button>` : '');
   } else if (anyRunning && !sw.isServer) {
     neededRole = anyCrashed ? 'run-multi-crash' : 'run-multi';
-    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN AGAIN</button>`
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun?'':'disabled'}>▶ RUN AGAIN</button>`
                   + (anyCrashed ? `<button class="btn danger sw-btn" onclick="reinstallSoftware('${swId}')">↺ REINSTALL</button>` : '');
   } else if (anyCrashed) {
     neededRole = 'crashed';
-    neededHtml = `<button class="btn run sw-btn" data-btn-role="crashed" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN</button>
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="crashed" onclick="runSoftware('${swId}')" ${canRun?'':'disabled'}>▶ RUN</button>
                   <button class="btn danger sw-btn" onclick="reinstallSoftware('${swId}')">↺ REINSTALL</button>`;
   } else {
     neededRole = canRun ? 'run' : 'run-disabled';
-    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun ? '' : 'disabled'}>▶ RUN</button>`;
+    neededHtml = `<button class="btn run sw-btn" data-btn-role="${neededRole}" onclick="runSoftware('${swId}')" ${canRun?'':'disabled'}>▶ RUN</button>`;
   }
 
-  if (existingRole !== neededRole) {
-    btnRow.innerHTML = neededHtml;
-  }
+  if (existingRole !== neededRole) btnRow.innerHTML = neededHtml;
 
-  // Per-instance progress rows (below buttons)
   const instContainer = card.querySelector('[data-role="instances"]');
   const existingRows = {};
-  for (const row of instContainer.querySelectorAll('[data-inst-id]')) {
-    existingRows[row.dataset.instId] = row;
-  }
+  for (const row of instContainer.querySelectorAll('[data-inst-id]')) existingRows[row.dataset.instId] = row;
   const activeIds = new Set();
   for (const inst of instances) {
     activeIds.add(String(inst.id));
@@ -2061,16 +2065,13 @@ function renderSoftwareCard(swId, container) {
            : ''}`;
     row.innerHTML = `<span style="color:var(--green-dim);font-size:10px;min-width:22px">#${inst.id}</span>${crashedHtml}`;
   }
-  for (const [idStr, row] of Object.entries(existingRows)) {
-    if (!activeIds.has(idStr)) row.remove();
-  }
+  for (const [idStr, row] of Object.entries(existingRows)) { if (!activeIds.has(idStr)) row.remove(); }
 }
 
 function renderShop() {
   const swEl = document.getElementById('shop-list');
   swEl.innerHTML = '';
 
-  // HW upgrades
   for (const item of SHOP_UPGRADES) {
     if (item.bought) continue;
     const canAfford = playerMoney >= item.price;
@@ -2086,23 +2087,17 @@ function renderShop() {
     } else if (item.ramReq > 0 && !hasRam) {
       reqLabel = `<div class="shop-req">Requires: ${item.ramReq} KB RAM</div>`;
     }
-    let btnLabel = '▶ BUY';
-    if (!canAfford) btnLabel = `⚠ NEED $${(item.price - playerMoney).toFixed(2)}`;
-    else if (!hasRam) btnLabel = `⚠ NEED RAM`;
-    else if (!reqMet) btnLabel = `⚠ PREREQ`;
+    let btnLabel = canAfford ? (hasRam ? (reqMet ? '▶ BUY' : '⚠ PREREQ') : '⚠ NEED RAM') : `⚠ NEED $${(item.price-playerMoney).toFixed(2)}`;
     div.innerHTML = `
       <div class="shop-name">${item.name}</div>
       <div class="shop-desc">${item.desc}</div>
       ${reqLabel}
       <div class="shop-price">$${item.price.toFixed(2)}</div>
-      <button class="btn gold-btn" style="margin-top:3px;font-size:11px;" onclick="buyShopItem('${item.id}')" ${canBuy ? '' : 'disabled'}>
-        ${btnLabel}
-      </button>
+      <button class="btn gold-btn" style="margin-top:3px;font-size:11px;" onclick="buyShopItem('${item.id}')" ${canBuy?'':'disabled'}>${btnLabel}</button>
     `;
     swEl.appendChild(div);
   }
 
-  // Software purchases
   for (const swDef of SOFTWARE_CATALOG) {
     if (installedSoftware[swDef.id] || swDef.price === 0) continue;
     const canAfford = playerMoney >= swDef.price;
@@ -2114,8 +2109,8 @@ function renderShop() {
       <div class="shop-desc">${swDef.desc}</div>
       <div class="shop-req">Requires: ${swDef.ramReq} KB RAM</div>
       <div class="shop-price">$${swDef.price.toFixed(2)}</div>
-      <button class="btn gold-btn" style="margin-top:3px;font-size:11px;" onclick="buySoftware('${swDef.id}')" ${canAfford && hasRam ? '' : 'disabled'}>
-        ${canAfford && hasRam ? '▶ INSTALL' : canAfford ? '⚠ NEED RAM' : '⚠ NEED $' + (swDef.price - playerMoney).toFixed(2)}
+      <button class="btn gold-btn" style="margin-top:3px;font-size:11px;" onclick="buySoftware('${swDef.id}')" ${canAfford&&hasRam?'':'disabled'}>
+        ${canAfford&&hasRam ? '▶ INSTALL' : canAfford ? '⚠ NEED RAM' : '⚠ NEED $'+(swDef.price-playerMoney).toFixed(2)}
       </button>
     `;
     swEl.appendChild(div);
@@ -2127,72 +2122,8 @@ function renderShop() {
 }
 
 // ==========================================
-// CHKDSK
+// COIN ANIMATION
 // ==========================================
-function toggleChkdsk() {
-  if (chkdskRunning) {
-    chkdskStopRequested = true;
-  } else {
-    runChkdsk();
-  }
-}
-
-async function runChkdsk() {
-  if (chkdskRunning) return;
-  chkdskRunning = true;
-  chkdskStopRequested = false;
-  const btn = document.getElementById('btn-chkdsk');
-  btn.textContent = '■ STOP CHKDSK';
-  btn.classList.add('danger');
-  log('CHKDSK: Starting disk scan...', 'warn');
-
-  let corrupted = 0;
-  let checked = 0;
-
-  for (let i = 0; i < DISK_SIZE; i++) {
-    if (chkdskStopRequested) break;
-
-    const id = disk[i];
-
-    // Only care about blocks that have a file id but the file doesn't exist
-    if (id !== null && id !== 0 && !files[id]) {
-      // Corrupt block — read it (so user sees the head travel)
-      await readBlock(i);
-
-      if (chkdskStopRequested) { disk[i] = null; corrupted++; render(); break; }
-
-      // Write-clear it
-      await writeBlock(i);
-      disk[i] = null;
-
-      corrupted++;
-      render();
-    }
-
-    checked++;
-
-    // Update status every 16 blocks to avoid flooding
-    if (checked % 16 === 0) {
-      log(`CHKDSK: ${checked}/${DISK_SIZE} blocks checked, ${corrupted} corrupt fixed`, 'defrag');
-      await sleep(0); // yield so UI can update
-    }
-  }
-
-  const stopped = chkdskStopRequested && checked < DISK_SIZE;
-  if (stopped) {
-    log(`CHKDSK: Stopped at block ${checked}. Fixed ${corrupted} corrupt block(s).`, 'warn');
-  } else {
-    log(`CHKDSK: Scan complete. ${checked} blocks checked, ${corrupted} corrupt block(s) fixed.`, corrupted > 0 ? 'warn' : 'defrag');
-  }
-
-  chkdskRunning = false;
-  chkdskStopRequested = false;
-  btn.textContent = '▶ CHKDSK';
-  btn.classList.remove('danger');
-  render();
-}
-
-
 function showCoinAtBlock(blockIdx) {
   const el = document.querySelector(`[data-block="${blockIdx}"]`);
   if (!el) return;
@@ -2200,13 +2131,15 @@ function showCoinAtBlock(blockIdx) {
   const coin = document.createElement('div');
   coin.className = 'coin-anim';
   coin.textContent = '🪙';
-  coin.style.left = (rect.left + rect.width / 2 - 9) + 'px';
-  coin.style.top  = (rect.top  - 4) + 'px';
+  coin.style.left = (rect.left + rect.width/2 - 9) + 'px';
+  coin.style.top  = (rect.top - 4) + 'px';
   document.body.appendChild(coin);
   setTimeout(() => coin.remove(), 1300);
 }
 
-
+// ==========================================
+// LOG
+// ==========================================
 const logEl = () => document.getElementById('log');
 function log(msg, type = '') {
   const line = document.createElement('div');
@@ -2215,7 +2148,7 @@ function log(msg, type = '') {
   line.textContent = `[${ts}] ${msg}`;
   logEl().appendChild(line);
   logEl().scrollTop = logEl().scrollHeight;
-  while (logEl().children.length > 100) logEl().removeChild(logEl().firstChild);
+  while (logEl().children.length > 120) logEl().removeChild(logEl().firstChild);
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -2226,25 +2159,24 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function init() {
   initDisk();
   initHeads();
-  log('DEFRAG.EXE v4.2 — System initialized', 'action');
+  log('DEFRAG.EXE v4.3 — System initialized', 'action');
   log('C:\\ drive online — 512 blocks', '');
+  log('FS: duplicate prevention + open/close handles active', 'fs');
 
-  // Auto-install starter software
   const starter = SOFTWARE_CATALOG.find(s => s.id === 'sw_ledger');
   installSoftware(starter);
 
-  // Seed some initial files for visual interest
+  // Seed initial files (silent — no dup errors expected)
   allocateFile('PAGEFILE.SYS', 16, {silent:true});
-  allocateFile('AUTOEXEC.BAT', 2, {silent:true});
-  allocateFile('CONFIG.SYS', 3, {silent:true});
+  allocateFile('AUTOEXEC.BAT', 2,  {silent:true});
+  allocateFile('CONFIG.SYS',   3,  {silent:true});
   const id1 = allocateFile('TEMP001.DAT', 12, {silent:true});
-  const id2 = allocateFile('CACHE.TMP', 8, {silent:true});
-  allocateFile('MSDOS.SYS', 10, {silent:true});
-  // Create some gaps
+  const id2 = allocateFile('CACHE.TMP',    8, {silent:true});
+  allocateFile('MSDOS.SYS',    10, {silent:true});
   if (id1) deleteFile(id1);
-  allocateFile('IO.SYS', 6, {silent:true});
+  allocateFile('IO.SYS',  6, {silent:true});
   if (id2) deleteFile(id2);
-  allocateFile('HIMEM.SYS', 9, {silent:true});
+  allocateFile('HIMEM.SYS',    9,  {silent:true});
   allocateFile('SMARTDRV.EXE', 14, {silent:true});
   const id3 = allocateFile('TEMP002.DAT', 7, {silent:true});
   if (id3) deleteFile(id3);
