@@ -973,17 +973,66 @@ async function deleteFileAndWrite(fid) {
 
 async function truncateFileFid(fid, rawOffset, rawSize) {
   const f = files[fid];
+  if (!f) throw new Error(`truncate: fid ${fid} not found`);
+
+  // Enforce open-handle contract — caller must have the file open.
+  if ((f.openCount || 0) === 0)
+    throw new Error(`truncate: ${f.name} is not open`);
+
+  // Refuse to truncate a file that is already fully pending deletion.
+  if (f.pendingDelete)
+    throw new Error(`truncate: ${f.name} is pending deletion`);
+
   const { offset, count } = resolveRange(f.blocks.length, rawOffset, rawSize);
-  for (let ti = offset; ti < offset + count; ti++) {
-    const blockIdx = f.blocks[ti];
-    if (blockIdx === undefined) continue;
-    await writeBlock(blockIdx);
-    if (disk[blockIdx] === fid) disk[blockIdx] = null;
+
+  // Preflight — validate every block before touching anything.
+  const snapshot = f.blocks.slice(offset, offset + count);
+  for (const blockIdx of snapshot) {
+    if (blockIdx < 0 || blockIdx >= DISK_SIZE)
+      throw new Error(`truncate: ${f.name} has out-of-range block ${blockIdx}`);
+    if (disk[blockIdx] !== fid)
+      throw new Error(`truncate: ${f.name} block ${blockIdx} already reassigned (disk owns ${disk[blockIdx]})`);
   }
-  f.blocks.splice(offset, count);
+
+  // Process each block individually: verify ownership again after the await
+  // (defrag may have moved the block while we were waiting for a write head),
+  // then free it and immediately remove it from f.blocks so the list stays
+  // consistent with disk[] at every yield point.
+  let freed = 0;
+  // We iterate the snapshot; as we remove entries from f.blocks the indices
+  // shift, so track the effective position explicitly.
+  let blockListOffset = offset; // index into f.blocks where next snapshot entry sits
+  for (const blockIdx of snapshot) {
+    // Re-verify ownership after the await yield point.
+    if (disk[blockIdx] !== fid) {
+      // Block was relocated by defrag between the preflight and now — skip it.
+      // It is no longer in f.blocks either (defrag updated that), so just
+      // advance without touching blockListOffset.
+      log(`truncate: ${f.name} block ${blockIdx} moved by defrag — skipping`, 'fs');
+      continue;
+    }
+
+    await writeBlock(blockIdx);
+
+    // Re-verify a second time after the write-head await.
+    if (disk[blockIdx] !== fid) {
+      log(`truncate: ${f.name} block ${blockIdx} moved during write — skipping`, 'fs');
+      continue;
+    }
+
+    // Commit: free the disk slot and splice this single entry from the block list.
+    disk[blockIdx] = null;
+    const listIdx = f.blocks.indexOf(blockIdx, blockListOffset);
+    if (listIdx !== -1) {
+      f.blocks.splice(listIdx, 1);
+      // Don't advance blockListOffset — next snapshot block is now at the same index.
+    }
+    freed++;
+  }
+
   f.size = f.blocks.length;
   f.modified = Date.now();
-  return count;
+  return freed;
 }
 
 // ==========================================
