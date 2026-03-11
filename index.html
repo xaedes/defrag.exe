@@ -1724,7 +1724,6 @@ function opDelete() {
   if (!selectedFileId || selectedFileId === 0) { log('No file selected', 'warn'); return; }
   const f = files[selectedFileId];
   if (!f) return;
-  if (f.persistent) { log(`Cannot delete ${f.name}: software file`, 'warn'); return; }
   log(`Deleted ${f.name}`, 'action');
   deleteFile(selectedFileId);
   render();
