@@ -1008,7 +1008,7 @@ async function truncateFileFid(fid, rawOffset, rawSize) {
       // Block was relocated by defrag between the preflight and now — skip it.
       // It is no longer in f.blocks either (defrag updated that), so just
       // advance without touching blockListOffset.
-      log(`truncate: ${f.name} block ${blockIdx} moved by defrag — skipping`, 'fs');
+      log(`truncate: ${f.name} block ${blockIdx} no longer owned — skipping`, 'fs');
       continue;
     }
 
@@ -1016,7 +1016,7 @@ async function truncateFileFid(fid, rawOffset, rawSize) {
 
     // Re-verify a second time after the write-head await.
     if (disk[blockIdx] !== fid) {
-      log(`truncate: ${f.name} block ${blockIdx} moved during write — skipping`, 'fs');
+      log(`truncate: ${f.name} block ${blockIdx} no longer owned after write — skipping`, 'fs');
       continue;
     }
 
